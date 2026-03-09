@@ -4,3 +4,4 @@ __pycache__/
 outputs/
 Spring 2026/
 .DS_Store
+.env
