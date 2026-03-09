@@ -27,7 +27,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from core.config import get_api_key, load_environment
+import os
+
+from core.config import load_environment
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +211,7 @@ def call_openai(
     response = client.chat.completions.create(
         model=model,
         max_tokens=2048,
+        temperature=0,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -256,9 +259,9 @@ def main() -> int:
     load_environment()
     args = parse_args()
 
-    api_key = get_api_key("openai")
+    api_key = os.getenv("OPEN_API_KEY")
     if not api_key:
-        raise SystemExit("OPENAI_API_KEY not set. Add it to your .env file.")
+        raise SystemExit("OPEN_API_KEY not set. Add it to your .env file.")
 
     retrieval_jsonl = Path(args.retrieval_jsonl).expanduser().resolve()
     chunks_jsonl = Path(args.chunks_jsonl).expanduser().resolve()
