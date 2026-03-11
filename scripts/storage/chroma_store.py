@@ -8,8 +8,10 @@ from typing import Any
 
 def _build_openai_embedding_function():
     """
-    Construct an OpenAI embedding function for Chroma using the OPENAI_API_KEY.
-    Falls back to None if chromadb's embedding utilities are unavailable.
+    Construct an OpenAI embedding function for Chroma.
+    Tries text-embedding-3-small, then text-embedding-ada-002.
+    Returns None (fall back to ChromaDB local embeddings) if the key is missing
+    or if neither model is accessible.
     """
     try:
         from chromadb.utils import embedding_functions
@@ -19,11 +21,20 @@ def _build_openai_embedding_function():
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
-    # You can change the model here if desired.
-    return embedding_functions.OpenAIEmbeddingFunction(
-        model_name="text-embedding-3-large",
-        api_key=api_key,
-    )
+
+    for model in ("text-embedding-3-small", "text-embedding-ada-002"):
+        try:
+            fn = embedding_functions.OpenAIEmbeddingFunction(
+                model_name=model,
+                api_key=api_key,
+            )
+            # Probe with a tiny call to confirm access before returning.
+            fn(["test"])
+            return fn
+        except Exception:
+            continue
+
+    return None
 
 
 def try_store_chroma(

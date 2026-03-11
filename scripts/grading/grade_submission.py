@@ -89,6 +89,60 @@ def load_student_content(
     return "\n\n".join(parts), student_chunks
 
 
+def load_chunks_by_type(
+    chunks_jsonl: Path,
+    source_type: str,
+    path_filter: str | None = None,
+    max_chars: int = 0,
+    assignment_id: str | None = None,
+) -> str:
+    """
+    Assemble text from chunks.jsonl where metadata.source_type == source_type.
+
+    Filtering priority (most specific first):
+      1. assignment_id — exact match on metadata.assignment_id (e.g. "1", "2").
+         Use this to unambiguously select one assignment's rubric/description.
+      2. path_filter — substring match on metadata.source_path (case-insensitive).
+         Falls back to this when assignment_id is not set.
+    If max_chars > 0, output is truncated at that character limit.
+    """
+    all_chunks = read_jsonl(chunks_jsonl)
+    matched = [
+        c for c in all_chunks
+        if str(c.get("metadata", {}).get("source_type", "")).lower() == source_type.lower()
+    ]
+    if assignment_id is not None:
+        matched = [
+            c for c in matched
+            if str(c.get("metadata", {}).get("assignment_id", "")) == str(assignment_id)
+        ]
+    elif path_filter:
+        filt = path_filter.lower()
+        matched = [
+            c for c in matched
+            if filt in str(c.get("metadata", {}).get("source_path", "")).lower()
+        ]
+    matched.sort(
+        key=lambda c: (
+            c.get("metadata", {}).get("document_order", 9999),
+            c.get("metadata", {}).get("sort_key", ""),
+        )
+    )
+    parts: list[str] = []
+    seen: set[str] = set()
+    total = 0
+    for c in matched:
+        text = str(c.get("content", "")).strip()
+        if not text or text in seen:
+            continue
+        if max_chars > 0 and total + len(text) > max_chars:
+            break
+        seen.add(text)
+        parts.append(text)
+        total += len(text)
+    return "\n\n".join(parts)
+
+
 def load_lecture_context(
     retrieval_jsonl: Path,
     student_path_filter: str | None,
@@ -97,16 +151,28 @@ def load_lecture_context(
     """
     Collect unique lecture snippets from retrieval_results.jsonl,
     ordered by how often they appear (most-retrieved first).
+
+    The preferred workflow queries ChromaDB with rubric/assignment chunks (not student
+    chunks), so retrieval_results.jsonl is assignment-scoped.  In that case
+    student_path_filter is ignored (every row in the file is already for this assignment).
+
+    Legacy behaviour: if rows carry 'student_source_path', apply student_path_filter.
     """
     rows = read_jsonl(retrieval_jsonl)
-    if student_path_filter:
+
+    # Detect whether this is rubric-based retrieval (new) or student-based (legacy).
+    # New format uses 'query_source_path'; legacy uses 'student_source_path'.
+    is_rubric_based = rows and "query_source_path" in rows[0]
+
+    if not is_rubric_based and student_path_filter:
+        # Legacy: filter to rows that belong to this student.
         filt = student_path_filter.lower()
         rows = [
             r for r in rows
             if filt in str(r.get("student_source_path", "")).lower()
         ]
 
-    # Count how often each lecture document appears across all student chunks.
+    # Count how often each lecture document appears across all query rows.
     doc_counts: dict[str, int] = {}
     for row in rows:
         results = row.get("results", {})
@@ -133,7 +199,7 @@ def load_lecture_context(
 # Prompt builder
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """\
+GENERIC_SYSTEM_PROMPT = """\
 You are grading a complete student assignment in a graduate Health Informatics course.
 
 Return one holistic grade out of 100 plus concise, evidence-based feedback.
@@ -182,6 +248,54 @@ Return ONLY valid JSON (no markdown, no extra text):
   "confidence": <float 0-1>
 }
 """
+
+RUBRIC_SYSTEM_PROMPT = """\
+You are grading a complete student assignment in a graduate Health Informatics course.
+
+A RUBRIC is provided in the prompt. You MUST:
+1. Parse the rubric to identify each scored section and its maximum point value.
+2. Grade the student strictly against each rubric section's criteria.
+3. In score_breakdown, use the rubric section names as keys and award points up to each
+   section's stated maximum. The keys must match the rubric sections exactly.
+4. overall_score = sum of all score_breakdown values (must be <= 100).
+
+CALIBRATION (per rubric section, as % of section max):
+- 95-100%: Excellent — all criteria fully addressed.
+- 85-94%: Strong — minor gaps only.
+- 70-84%: Good — solid but some criteria missing depth.
+- 50-69%: Partial — limited coverage or significant issues.
+- <50%: Inadequate — major criteria missing or incorrect.
+
+BLIND GRADING: Ignore filenames, folder names, IDs, or quality-hint words like "good/bad example".
+Grade only the submission content.
+
+DEDUCTION POLICY:
+- Deduct only for explicitly missing or incorrect required criteria.
+- If information appears in diagram/image-extracted text, count it as valid evidence.
+- Do not penalise for stylistic preferences or optional enhancements.
+
+Return ONLY valid JSON (no markdown, no extra text):
+{
+  "student_file": "<filename>",
+  "overall_score": <float 0-100>,
+  "overall_feedback": "<2-4 sentences summarising performance against the rubric>",
+  "score_breakdown": {
+    "<rubric_section_name>": <points_awarded float>,
+    ...
+  },
+  "strengths": ["<short bullet referencing a rubric criterion met well>"],
+  "gaps": ["<short bullet referencing a rubric criterion not met or weak>"],
+  "action_items": ["<specific, actionable improvement tied to rubric criterion>"],
+  "confidence": <float 0-1>
+}
+"""
+
+# Backward-compat alias used by callers that reference SYSTEM_PROMPT directly.
+SYSTEM_PROMPT = GENERIC_SYSTEM_PROMPT
+
+
+def select_system_prompt(has_rubric: bool) -> str:
+    return RUBRIC_SYSTEM_PROMPT if has_rubric else GENERIC_SYSTEM_PROMPT
 
 
 def detect_expected_sections(text: str) -> list[str]:
@@ -326,19 +440,30 @@ def normalize_grade_result(
     # Preferred holistic schema
     score_breakdown_raw = result.get("score_breakdown", {})
     score_breakdown: dict[str, float] = {}
+    GENERIC_LIMITS = {
+        "requirement_coverage": 30.0,
+        "correctness_and_reasoning": 25.0,
+        "workflow_and_structure_quality": 20.0,
+        "lecture_alignment": 15.0,
+        "clarity_and_professionalism": 10.0,
+    }
     if isinstance(score_breakdown_raw, dict):
-        limits = {
-            "requirement_coverage": 30.0,
-            "correctness_and_reasoning": 25.0,
-            "workflow_and_structure_quality": 20.0,
-            "lecture_alignment": 15.0,
-            "clarity_and_professionalism": 10.0,
-        }
-        for key, maxv in limits.items():
-            val = _to_float(score_breakdown_raw.get(key))
-            if val is None:
-                continue
-            score_breakdown[key] = round(max(0.0, min(maxv, val)), 2)
+        generic_keys = set(GENERIC_LIMITS.keys())
+        result_keys = set(score_breakdown_raw.keys())
+        if result_keys & generic_keys:
+            # Generic scoring model — validate against known limits
+            for key, maxv in GENERIC_LIMITS.items():
+                val = _to_float(score_breakdown_raw.get(key))
+                if val is None:
+                    continue
+                score_breakdown[key] = round(max(0.0, min(maxv, val)), 2)
+        else:
+            # Rubric-defined categories — accept as-is, values are the LLM's point awards
+            for key, val in score_breakdown_raw.items():
+                v = _to_float(val)
+                if v is None:
+                    continue
+                score_breakdown[key] = round(max(0.0, v), 2)
 
     strengths_raw = result.get("strengths", [])
     gaps_raw = result.get("gaps", [])
@@ -431,13 +556,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rubric-file",
         default=None,
-        help="Optional rubric text file used to anchor scoring.",
+        help="Legacy: standalone rubric text file. Use --rubric-path instead when rubric was "
+             "extracted through the pipeline.",
     )
     parser.add_argument(
         "--assignment-file",
         default=None,
-        help="Text file with the actual assignment instructions/questions.",
+        help="Legacy: standalone assignment text file. Use --assignment-path instead.",
     )
+    parser.add_argument(
+        "--assignment-id",
+        default=None,
+        help="Assignment number (e.g. '1' or '2'). Preferred over --rubric-path / "
+             "--assignment-path: unambiguously selects chunks by metadata.assignment_id.",
+    )
+    parser.add_argument(
+        "--rubric-path",
+        default=None,
+        help="Source-path substring to identify rubric chunks inside chunks.jsonl "
+             "(e.g. 'Assignment 1' or 'Grading Rubric'). Ignored when --assignment-id is set.",
+    )
+    parser.add_argument(
+        "--assignment-path",
+        default=None,
+        help="Source-path substring to identify assignment description chunks "
+             "(e.g. 'Assignment1_Description').",
+    )
+    parser.add_argument(
+        "--reference-path",
+        default=None,
+        help="Source-path substring to include reference material chunks "
+             "(e.g. 'HIMSS' or 'relevant_material').",
+    )
+    parser.add_argument("--max-rubric-chars", type=int, default=8000)
+    parser.add_argument("--max-assignment-chars", type=int, default=6000)
+    parser.add_argument("--max-reference-chars", type=int, default=8000)
     return parser.parse_args()
 
 
@@ -452,7 +605,23 @@ def run_grading(
     max_student_chars: int,
     rubric_file: Path | None = None,
     assignment_file: Path | None = None,
+    rubric_path_filter: str | None = None,
+    assignment_path_filter: str | None = None,
+    reference_path_filter: str | None = None,
+    assignment_id: str | None = None,
+    max_rubric_chars: int = 8000,
+    max_assignment_chars: int = 6000,
+    max_reference_chars: int = 8000,
 ) -> Path:
+    """
+    Grade a student submission.
+
+    Rubric and assignment text can be supplied in order of preference:
+      1. assignment_id — exact match on metadata.assignment_id (e.g. "1" or "2").
+         Unambiguously selects one assignment's rubric and description from chunks.jsonl.
+      2. rubric_path_filter / assignment_path_filter — substring match on source_path.
+      3. rubric_file / assignment_file — legacy standalone text files.
+    """
     api_key = get_api_key("openai")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set. Add it to your .env file.")
@@ -483,17 +652,50 @@ def run_grading(
         print("WARNING: No lecture context found. Grading without lecture reference.")
         lecture_context = "(No lecture context available)"
 
-    rubric_text = read_text_file(rubric_file)
-    if rubric_file and not rubric_text:
-        print(f"WARNING: rubric file not found/empty: {rubric_file}")
+    # --- Rubric: prefer assignment_id > path_filter > text file ---
+    rubric_text = ""
+    if assignment_id is not None or rubric_path_filter is not None:
+        rubric_text = load_chunks_by_type(
+            chunks_jsonl, "rubric", rubric_path_filter, max_rubric_chars,
+            assignment_id=assignment_id,
+        )
+        if rubric_text:
+            label = f"assignment_id={assignment_id}" if assignment_id else rubric_path_filter
+            print(f"Rubric loaded from chunks ({label}): {len(rubric_text):,} chars")
+    if not rubric_text and rubric_file:
+        rubric_text = read_text_file(rubric_file)
+        if rubric_text:
+            print(f"Rubric loaded from file: {len(rubric_text):,} chars")
+        else:
+            print(f"WARNING: rubric file not found/empty: {rubric_file}")
 
-    assignment_text = read_text_file(assignment_file)
-    if assignment_file and not assignment_text:
-        print(f"WARNING: assignment file not found/empty: {assignment_file}")
-    if assignment_text:
-        print(f"Assignment instructions loaded: {len(assignment_text):,} chars")
-    else:
+    # --- Assignment description: prefer assignment_id > path_filter > text file ---
+    assignment_text = ""
+    if assignment_id is not None or assignment_path_filter is not None:
+        assignment_text = load_chunks_by_type(
+            chunks_jsonl, "assignment", assignment_path_filter, max_assignment_chars,
+            assignment_id=assignment_id,
+        )
+        if assignment_text:
+            label = f"assignment_id={assignment_id}" if assignment_id else assignment_path_filter
+            print(f"Assignment loaded from chunks ({label}): {len(assignment_text):,} chars")
+    if not assignment_text and assignment_file:
+        assignment_text = read_text_file(assignment_file)
+        if assignment_text:
+            print(f"Assignment instructions loaded from file: {len(assignment_text):,} chars")
+        else:
+            print(f"WARNING: assignment file not found/empty: {assignment_file}")
+    if not assignment_text:
         print("WARNING: No assignment instructions — model will infer questions from student text.")
+
+    # --- Optional reference material (e.g. VWC HIMSS Davies doc) ---
+    reference_text = ""
+    if reference_path_filter is not None:
+        reference_text = load_chunks_by_type(
+            chunks_jsonl, "assignment", reference_path_filter, max_reference_chars
+        )
+        if reference_text:
+            print(f"Reference material loaded from chunks ({reference_path_filter}): {len(reference_text):,} chars")
 
     # Prefer sections from assignment instructions (authoritative) over student text.
     # This ensures that even if a student's text has no numbered headings, the
@@ -513,6 +715,11 @@ def run_grading(
         if expected_sections:
             print(f"Expected sections (from student text): {expected_sections}")
 
+    # Merge reference material into assignment context so the LLM can draw on it.
+    if reference_text:
+        assignment_text = (assignment_text + "\n\n=== REFERENCE MATERIAL ===\n" + reference_text
+                          if assignment_text else reference_text)
+
     user_msg = build_user_message(
         student_text=student_text,
         lecture_context=lecture_context,
@@ -523,11 +730,12 @@ def run_grading(
         max_student_chars=max_student_chars,
     )
 
-    print(f"Calling OpenAI ({model}) ...")
+    system_prompt = select_system_prompt(has_rubric=bool(rubric_text))
+    print(f"Calling OpenAI ({model}) [{'rubric-aware' if rubric_text else 'generic'} scoring] ...")
     response = call_openai(
         model=model,
         api_key=api_key,
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         user=user_msg,
     )
 
@@ -542,11 +750,13 @@ def run_grading(
 
     output = {
         "grading_model": response["model"],
+        "scoring_mode": "rubric_aware" if rubric_text else "generic",
         "student_path_filter": student_path_filter,
         "chunks_jsonl": str(chunks_jsonl),
         "retrieval_jsonl": str(retrieval_jsonl),
-        "rubric_file": str(rubric_file) if rubric_file else None,
-        "assignment_file": str(assignment_file) if assignment_file else None,
+        "rubric_source": rubric_path_filter or (str(rubric_file) if rubric_file else None),
+        "assignment_source": assignment_path_filter or (str(assignment_file) if assignment_file else None),
+        "reference_source": reference_path_filter,
         "expected_sections": expected_sections,
         "token_usage": usage,
         **normalized,
@@ -598,6 +808,13 @@ def main() -> int:
         max_student_chars=int(args.max_student_chars),
         rubric_file=rubric_file,
         assignment_file=assignment_file,
+        assignment_id=args.assignment_id,
+        rubric_path_filter=args.rubric_path,
+        assignment_path_filter=args.assignment_path,
+        reference_path_filter=args.reference_path,
+        max_rubric_chars=int(args.max_rubric_chars),
+        max_assignment_chars=int(args.max_assignment_chars),
+        max_reference_chars=int(args.max_reference_chars),
     )
     return 0
 

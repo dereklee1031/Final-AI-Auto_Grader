@@ -33,7 +33,28 @@ def list_target_files(data_dir: Path) -> list[Path]:
 
 
 def infer_source_type(rel_path: str) -> str:
-    return "lecture" if "lecture" in rel_path.lower() else "student"
+    lower = rel_path.lower()
+    name = Path(rel_path).name.lower()
+    # Lecture modules: folder contains "lecture" OR filename is "module N"
+    if "lecture" in lower or (name.startswith("module") and name.endswith(".pdf")):
+        return "lecture"
+    # Rubric files: filename contains "rubric"
+    if "rubric" in name:
+        return "rubric"
+    # Assignment description / reference material inside rubric folders
+    if "assignment rubric" in lower:
+        return "assignment"
+    return "student"
+
+
+def infer_assignment_id(rel_path: str) -> str | None:
+    """
+    Extract assignment number from paths like 'Assignment Rubrics/Assignment 1/...'
+    or 'Assignment 1_/Student N/...'.  Returns e.g. '1', '2', or None.
+    """
+    import re
+    m = re.search(r'[Aa]ssignment\s*(\d+)', rel_path)
+    return m.group(1) if m else None
 
 
 def guess_mime(ext: str) -> str:
@@ -167,6 +188,7 @@ def _append_text_chunks(
     rel_path: str,
     file_name: str,
     source_type: str,
+    assignment_id: str | None = None,
     fmt: str,
     page_number: int,
     block_index: int,
@@ -185,6 +207,7 @@ def _append_text_chunks(
             "filename": file_name,
             "source_path": rel_path,
             "source_type": source_type,
+            "assignment_id": assignment_id,
             "format": fmt,
             "page_number": page_number,
             "block_index": block_index,
@@ -218,6 +241,7 @@ def _describe_image_item(
     rel_path: str,
     file_name: str,
     source_type: str,
+    assignment_id: str | None = None,
     fmt: str,
     page_number: int,
     block_index: int,
@@ -346,6 +370,7 @@ def _describe_image_item(
         "filename": file_name,
         "source_path": rel_path,
         "source_type": source_type,
+        "assignment_id": assignment_id,
         "format": fmt,
         "page_number": page_number,
         "block_index": block_index,
@@ -471,6 +496,7 @@ def run_describe(
             payload = json.loads(per_file_json_path.read_text(encoding="utf-8"))
             file_name = Path(rel_path).name
             source_type = infer_source_type(rel_path)
+            assignment_id = infer_assignment_id(rel_path)
 
             chunks: list[dict[str, Any]] = []
             fstats: dict[str, Any] = {
@@ -512,6 +538,7 @@ def run_describe(
                             rel_path=rel_path,
                             file_name=file_name,
                             source_type=source_type,
+                            assignment_id=assignment_id,
                             fmt="pdf",
                             page_number=int(t["page_number"]),
                             block_index=int(t["block_index"]),
@@ -529,6 +556,7 @@ def run_describe(
                             rel_path=rel_path,
                             file_name=file_name,
                             source_type=source_type,
+                            assignment_id=assignment_id,
                             fmt="pdf",
                             page_number=int(im["page_number"]),
                             block_index=int(im["block_index"]),
@@ -553,6 +581,7 @@ def run_describe(
                         "filename": file_name,
                         "source_path": rel_path,
                         "source_type": source_type,
+                        "assignment_id": assignment_id,
                         "format": "pdf",
                         "page_number": page_number,
                         "block_index": block_index,
@@ -584,6 +613,7 @@ def run_describe(
                             "filename": file_name,
                             "source_path": rel_path,
                             "source_type": source_type,
+                            "assignment_id": assignment_id,
                             "format": "xlsx",
                             "page_number": int(t["sheet_index"]),
                             "block_index": int(t["block_index"]),
@@ -604,6 +634,7 @@ def run_describe(
                             rel_path=rel_path,
                             file_name=file_name,
                             source_type=source_type,
+                            assignment_id=assignment_id,
                             fmt="xlsx",
                             page_number=int(im["sheet_index"]),
                             block_index=int(im["block_index"]),
@@ -626,6 +657,7 @@ def run_describe(
                         rel_path=rel_path,
                         file_name=file_name,
                         source_type=source_type,
+                        assignment_id=assignment_id,
                         fmt="html",
                         page_number=1,
                         block_index=int(t["block_index"]),

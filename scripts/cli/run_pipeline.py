@@ -46,9 +46,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunks-jsonl", help="Path to chunks.jsonl for index/retrieve/grade modes")
     parser.add_argument("--retrieval-out-jsonl", default="outputs/retrieval_results.jsonl")
     parser.add_argument("--retrieval-top-k", type=int, default=6)
+    parser.add_argument(
+        "--query-source", default="rubric",
+        choices=["rubric", "assignment", "student"],
+        help="Source type used to query ChromaDB in retrieve mode. "
+             "'rubric' (default) uses rubric chunks — best practice since the rubric defines "
+             "what needs to be graded. 'assignment' uses assignment description chunks. "
+             "'student' is legacy behaviour (queries with student chunks).",
+    )
     parser.add_argument("--student-path", default=None, help="Filter to one student source path substring")
-    parser.add_argument("--rubric-file", default=None, help="Optional rubric text file for grading")
-    parser.add_argument("--assignment-file", default=None, help="Text file with the actual assignment instructions/questions for grading")
+    parser.add_argument("--rubric-file", default=None, help="Legacy: standalone rubric text file")
+    parser.add_argument("--assignment-file", default=None, help="Legacy: standalone assignment text file")
+    parser.add_argument(
+        "--assignment-id", default=None,
+        help="Assignment number (e.g. '1' or '2'). Preferred filter: unambiguously selects "
+             "rubric and assignment chunks by metadata.assignment_id.",
+    )
+    parser.add_argument(
+        "--rubric-path", default=None,
+        help="Source-path substring to identify rubric chunks in chunks.jsonl "
+             "(e.g. 'Grading Rubric' or 'Assignment 1'). Ignored when --assignment-id is set.",
+    )
+    parser.add_argument(
+        "--assignment-path", default=None,
+        help="Source-path substring to identify assignment description chunks "
+             "(e.g. 'Assignment1_Description')",
+    )
+    parser.add_argument(
+        "--reference-path", default=None,
+        help="Source-path substring to include reference/case-study chunks "
+             "(e.g. 'HIMSS' or 'relevant_material')",
+    )
+    parser.add_argument("--max-rubric-chars", type=int, default=8000)
+    parser.add_argument("--max-assignment-chars", type=int, default=6000)
+    parser.add_argument("--max-reference-chars", type=int, default=8000)
     parser.add_argument("--grading-model", default="gpt-4o-2024-11-20", help="LLM used in grade mode")
     parser.add_argument("--max-lecture-chars", type=int, default=12000)
     parser.add_argument("--max-student-chars", type=int, default=20000)
@@ -224,7 +255,7 @@ def main() -> int:
         return 0
 
     if args.mode == "retrieve":
-        from retrieval.chroma_rag import retrieve_lecture_context_for_student_chunks
+        from retrieval.chroma_rag import retrieve_lecture_context
 
         if not args.chunks_jsonl:
             raise SystemExit("--chunks-jsonl is required for retrieve mode")
@@ -232,17 +263,20 @@ def main() -> int:
         if not chunks_jsonl.exists():
             raise SystemExit(f"chunks.jsonl not found: {chunks_jsonl}")
 
+        query_source = getattr(args, "query_source", "rubric")
         chroma_path = args.chroma_path or str(run_root / "chroma_db")
         out_jsonl = Path(args.retrieval_out_jsonl).expanduser().resolve()
-        stats = retrieve_lecture_context_for_student_chunks(
+        stats = retrieve_lecture_context(
             chroma_path=chroma_path,
             chroma_collection=args.chroma_collection,
-            student_chunks_jsonl=chunks_jsonl,
+            chunks_jsonl=chunks_jsonl,
             top_k=args.retrieval_top_k,
             out_jsonl=out_jsonl,
+            query_source_type=query_source,
+            assignment_id=args.assignment_id,
         )
         print(f"Retrieval written: {stats['out_jsonl']}")
-        print(f"Student queries written: {stats['queries_written']}")
+        print(f"Query source: {query_source}  |  Queries written: {stats['queries_written']}")
         return 0
 
     if args.mode == "grade":
@@ -271,6 +305,13 @@ def main() -> int:
             max_student_chars=int(args.max_student_chars),
             rubric_file=rubric_file,
             assignment_file=assignment_file,
+            assignment_id=args.assignment_id,
+            rubric_path_filter=args.rubric_path,
+            assignment_path_filter=args.assignment_path,
+            reference_path_filter=args.reference_path,
+            max_rubric_chars=int(args.max_rubric_chars),
+            max_assignment_chars=int(args.max_assignment_chars),
+            max_reference_chars=int(args.max_reference_chars),
         )
         print(f"Grading written: {out_path}")
         return 0

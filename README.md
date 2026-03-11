@@ -63,23 +63,74 @@ python scripts/cli/run_pipeline.py \
   --chroma-collection "phase1_chunks"
 
 # 4) Retrieve lecture context for student chunks
+# Retrieve for Assignment 1 — queries ChromaDB with Assignment 1 rubric chunks (preferred).
+# This finds lecture content relevant to the assignment topics, not to a specific student.
 python scripts/cli/run_pipeline.py \
   --mode retrieve \
   --chunks-jsonl "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20/chunks.jsonl" \
   --chroma-path "outputs/final_phase1/run_01/chroma_db" \
   --chroma-collection "phase1_chunks" \
-  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval_results.jsonl" \
+  --query-source rubric \
+  --assignment-id "1" \
+  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval_a1.jsonl" \
   --retrieval-top-k 6
 
-# 5) Grade one student (with rubric)
+# 5a) Grade one student — Assignment 1 (Workflow Redesign)
+#     --assignment-id matches metadata.assignment_id="1", set during extraction.
+#     This unambiguously selects Assignment 1's rubric and description from chunks.jsonl.
 python scripts/cli/run_pipeline.py \
   --mode grade \
   --chunks-jsonl "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20/chunks.jsonl" \
   --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval_results.jsonl" \
   --student-path "Student 1" \
-  --rubric-file "docs/rubric.txt" \
+  --assignment-id "1" \
+  --reference-path "HIMSS" \
+  --grading-model "gpt-4o-2024-11-20"
+
+# 5b) Grade one student — Assignment 2 (EHR Functional Requirements)
+python scripts/cli/run_pipeline.py \
+  --mode grade \
+  --chunks-jsonl "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20/chunks.jsonl" \
+  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval_results.jsonl" \
+  --student-path "Student 1" \
+  --assignment-id "2" \
+  --reference-path "relevant_material" \
   --grading-model "gpt-4o-2024-11-20"
 ```
+
+**How rubric/assignment content flows into the grader:**
+
+The data directory should be structured so all source material lives together:
+
+```text
+data/Spring 2026/
+├── Assignment Rubrics/
+│   ├── Assignment 1/
+│   │   ├── Copy of CS581 Assignment 1 Workflow BPR Grading Rubric.pdf   ← source_type: rubric
+│   │   ├── Copy of CS581_Assignment1_Description.pdf                    ← source_type: assignment
+│   │   └── Copy of HIMSS_Davies_Award_...pdf                            ← source_type: assignment
+│   └── Assignment 2/
+│       ├── Copy of CS581 Assignment 2 ...Grading Rubric.pdf             ← source_type: rubric
+│       ├── Copy of CS581 Assignment 2 ...pdf                            ← source_type: assignment
+│       └── Copy of Assignment2_relevant_material.pdf                    ← source_type: assignment
+├── Lecture [PDF versions]/                                               ← source_type: lecture
+│   ├── Module 1.pdf … Module 6.pdf
+└── Assignment Examples Fall 2025/                                        ← source_type: student
+    └── Assignment 1_/Student N/Student N.pdf
+```
+
+`infer_source_type` in `scripts/core/pipeline.py` auto-tags files based on path/filename:
+- `"rubric"` in filename → `source_type: rubric`
+- Under `Assignment Rubrics/` but not a rubric file → `source_type: assignment`
+- Under `Lecture [PDF versions]/` or filename starts with `Module` → `source_type: lecture`
+- Everything else → `source_type: student`
+
+When grading:
+- `--rubric-path` / `--assignment-path` / `--reference-path` are substring filters
+  matched against `source_path` in the chunks.
+- If a rubric is found, the grader switches to **rubric-aware** scoring: the LLM
+  parses rubric sections and their point values and grades strictly against them.
+- If no rubric is found, it falls back to the **generic** 5-category scoring model.
 
 Note: sections below this block are legacy starter notes from earlier iterations.
 For the current merged architecture, follow the commands in this "Final Unified Pipeline (New)" section.
