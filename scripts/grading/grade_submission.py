@@ -202,49 +202,48 @@ def load_lecture_context(
 GENERIC_SYSTEM_PROMPT = """\
 You are grading a complete student assignment in a graduate Health Informatics course.
 
-Return one holistic grade out of 100 plus concise, evidence-based feedback.
-If assignment instructions are provided, grade against them. If not, grade based on completeness,
-correctness, and coherence of the student's submission.
+Grade against the assignment instructions if provided. Otherwise grade on completeness,
+correctness, and coherence.
 
-SCORING MODEL (0-100 total):
-- requirement_coverage (0-30): Did the student address requested tasks/sections?
-- correctness_and_reasoning (0-25): Are claims/processes accurate and logically sound?
-- workflow_and_structure_quality (0-20): Is process/workflow clear, ordered, and usable?
-- lecture_alignment (0-15): Uses relevant course concepts/terminology appropriately.
-- clarity_and_professionalism (0-10): Clear writing, organization, actionable details.
+SCORING MODEL — grade each criterion below as a question (score out of its stated max):
+- Q1  requirement_coverage (0-30): Did the student address all requested tasks/sections?
+- Q2  correctness_and_reasoning (0-25): Are claims/processes accurate and logically sound?
+- Q3  workflow_and_structure_quality (0-20): Is the process/workflow clear, ordered, and usable?
+- Q4  lecture_alignment (0-15): Uses relevant course concepts/terminology appropriately.
+- Q5  clarity_and_professionalism (0-10): Clear writing, organisation, actionable details.
 
-CALIBRATION:
-- 95-100: Excellent and complete; no material gaps.
-- 85-94: Strong work with minor gaps.
-- 70-84: Good partial work; some notable missing depth.
-- 50-69: Limited coverage or significant issues.
-- <50: Major missing/incorrect content.
-- Do not deduct heavily for grammar/style when technical content is strong.
+CALIBRATION (as % of each criterion's max):
+- 95-100%: Excellent — all criteria fully addressed.
+- 85-94%: Strong — minor gaps only.
+- 70-84%: Good — solid but missing some depth.
+- 50-69%: Partial — limited coverage or significant issues.
+- <50%: Inadequate — major criteria missing or incorrect.
 
-BLIND GRADING REQUIREMENT:
-- Ignore any dataset labels or hints (e.g., filenames, IDs, folder names, words like "good/bad").
-- Grade only the assignment content quality.
+BLIND GRADING: Ignore filenames, folder names, IDs, or quality-hint words like "good/bad".
+Grade only the submission content.
 
 DEDUCTION POLICY:
-- Start from full credit in each category and deduct only for explicit missing/incorrect required content.
+- Deduct only for explicitly missing or incorrect required content.
 - Do NOT deduct for optional enhancements or stylistic preferences.
 - If information appears in diagram/image-extracted text, count it as valid evidence.
 
 Return ONLY valid JSON (no markdown, no extra text):
 {
   "student_file": "<filename>",
-  "overall_score": <float 0-100>,
-  "overall_feedback": "<2-4 sentences>",
-  "score_breakdown": {
-    "requirement_coverage": <0-30>,
-    "correctness_and_reasoning": <0-25>,
-    "workflow_and_structure_quality": <0-20>,
-    "lecture_alignment": <0-15>,
-    "clarity_and_professionalism": <0-10>
-  },
+  "overall_score": <sum of all question scores, float 0-100>,
+  "overall_feedback": "<2-4 sentences summarising overall performance>",
+  "questions": [
+    {
+      "question_id": "<Q1..Q5>",
+      "question_summary": "<criterion name in one sentence>",
+      "student_answer_summary": "<2-3 sentences describing what the student actually submitted for this criterion>",
+      "score": <points awarded, float within criterion max>,
+      "feedback": "<2-3 sentences of specific, evidence-based feedback for this criterion>"
+    }
+  ],
   "strengths": ["<short bullet>"],
   "gaps": ["<short bullet>"],
-  "action_items": ["<specific improvement action>"],
+  "action_items": ["<specific, actionable improvement>"],
   "confidence": <float 0-1>
 }
 """
@@ -252,37 +251,49 @@ Return ONLY valid JSON (no markdown, no extra text):
 RUBRIC_SYSTEM_PROMPT = """\
 You are grading a complete student assignment in a graduate Health Informatics course.
 
-A RUBRIC is provided in the prompt. You MUST:
+A RUBRIC is provided. You MUST:
 1. Parse the rubric to identify each scored section and its maximum point value.
 2. Grade the student strictly against each rubric section's criteria.
-3. In score_breakdown, use the rubric section names as keys and award points up to each
-   section's stated maximum. The keys must match the rubric sections exactly.
-4. overall_score = sum of all score_breakdown values (must be <= 100).
+3. For each rubric section produce one entry in the "questions" array.
+4. overall_score = sum of all question scores (must be <= 100).
 
 CALIBRATION (per rubric section, as % of section max):
-- 95-100%: Excellent — all criteria fully addressed.
-- 85-94%: Strong — minor gaps only.
-- 70-84%: Good — solid but some criteria missing depth.
-- 50-69%: Partial — limited coverage or significant issues.
-- <50%: Inadequate — major criteria missing or incorrect.
+- 95-100%: Thorough and complete — all required elements addressed with reasonable depth.
+- 85-94%: Complete with one or two minor omissions.
+- 70-84%: Most criteria addressed but notable gaps in required elements.
+- 50-69%: Partial — several required criteria missing or significantly underdeveloped.
+- <50%: Inadequate — majority of criteria missing or incorrect.
+
+GRADING PHILOSOPHY: This is a graduate professional course. A student who addresses all required
+rubric criteria with reasonable effort and depth earns near-full credit (95-100%). Only deduct
+meaningfully when required criteria are clearly absent or incorrect. Do NOT deduct for:
+- Imperfect wording or style
+- Missing optional enhancements
+- Depth beyond what was required
+- Presentation choices
 
 BLIND GRADING: Ignore filenames, folder names, IDs, or quality-hint words like "good/bad example".
 Grade only the submission content.
 
 DEDUCTION POLICY:
-- Deduct only for explicitly missing or incorrect required criteria.
+- Start at full credit for each section and deduct only for explicitly missing or incorrect required criteria.
 - If information appears in diagram/image-extracted text, count it as valid evidence.
-- Do not penalise for stylistic preferences or optional enhancements.
+- Small omissions (one missing element out of many) warrant small deductions (1-3 pts), not large ones.
 
 Return ONLY valid JSON (no markdown, no extra text):
 {
   "student_file": "<filename>",
-  "overall_score": <float 0-100>,
+  "overall_score": <sum of all question scores, float 0-100>,
   "overall_feedback": "<2-4 sentences summarising performance against the rubric>",
-  "score_breakdown": {
-    "<rubric_section_name>": <points_awarded float>,
-    ...
-  },
+  "questions": [
+    {
+      "question_id": "<Q1, Q2, ...>",
+      "question_summary": "<rubric section name / criterion in one sentence>",
+      "student_answer_summary": "<2-3 sentences describing what the student actually submitted for this criterion>",
+      "score": <points awarded for this section, float within section max>,
+      "feedback": "<2-3 sentences of specific, evidence-based feedback for this criterion>"
+    }
+  ],
   "strengths": ["<short bullet referencing a rubric criterion met well>"],
   "gaps": ["<short bullet referencing a rubric criterion not met or weak>"],
   "action_items": ["<specific, actionable improvement tied to rubric criterion>"],
@@ -388,6 +399,7 @@ def call_openai(
         raise RuntimeError("openai package not installed. Run: pip install openai") from exc
 
     client = openai.OpenAI(api_key=api_key)
+
     response = client.chat.completions.create(
         model=model,
         max_tokens=4096,
@@ -486,7 +498,7 @@ def normalize_grade_result(
             score = _to_float(q.get("score"))
             if score is None:
                 continue
-            score = max(0.0, min(10.0, score))
+            score = max(0.0, score)
             qid = str(q.get("question_id", f"Q{idx}")).strip() or f"Q{idx}"
             questions.append(
                 {
@@ -508,7 +520,7 @@ def normalize_grade_result(
     if score_breakdown:
         overall_score = round(sum(score_breakdown.values()), 2)
     elif questions:
-        overall_score = round((sum(q["score"] for q in questions) / len(questions)) * 10.0, 2)
+        overall_score = round(sum(q["score"] for q in questions), 2)
     else:
         model_score = _to_float(result.get("overall_score"))
         overall_score = round(max(0.0, min(100.0, model_score)), 2) if model_score is not None else 0.0
@@ -631,18 +643,17 @@ def run_grading(
     if not chunks_jsonl.exists():
         raise RuntimeError(f"chunks.jsonl not found: {chunks_jsonl}")
 
+    # --- Student content from chunks.jsonl ---
     print(f"Loading student content from: {chunks_jsonl}")
     student_text, student_chunks = load_student_content(chunks_jsonl, student_path_filter)
     if not student_text:
         raise RuntimeError("No student content found. Check --student-path filter or chunks.jsonl.")
-
-    # Determine the student filename for the report.
     student_file = "unknown"
     if student_chunks:
         student_file = student_chunks[0].get("metadata", {}).get("filename", "unknown")
-    student_file_for_model = anonymize_label(student_file)
-
     print(f"Student file: {student_file}  |  {len(student_text):,} chars  |  {len(student_chunks)} chunks")
+
+    student_file_for_model = anonymize_label(student_file)
 
     print(f"Loading lecture context from: {retrieval_jsonl}")
     lecture_context = load_lecture_context(retrieval_jsonl, student_path_filter, max_lecture_chars)
@@ -731,7 +742,8 @@ def run_grading(
     )
 
     system_prompt = select_system_prompt(has_rubric=bool(rubric_text))
-    print(f"Calling OpenAI ({model}) [{'rubric-aware' if rubric_text else 'generic'} scoring] ...")
+    mode_label = "rubric-aware" if rubric_text else "generic"
+    print(f"Calling OpenAI ({model}) [{mode_label} scoring] ...")
     response = call_openai(
         model=model,
         api_key=api_key,
@@ -780,8 +792,7 @@ def run_grading(
         if questions:
             print(f"\nPer-question breakdown ({len(questions)} questions):")
             for q in questions:
-                topic = "ON-TOPIC" if q.get("on_topic") else "OFF-TOPIC"
-                print(f"  [{q.get('question_id')}] {q.get('score')}/10 ({topic}) — {q.get('feedback', '')[:70]}")
+                print(f"  [{q.get('question_id')}] {q.get('score')} pts — {q.get('feedback', '')[:80]}")
     else:
         print("\nWARNING: Could not parse JSON from OpenAI response. Raw output saved in grades.json.")
 
