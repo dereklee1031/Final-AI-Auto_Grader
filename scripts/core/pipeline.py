@@ -24,9 +24,17 @@ def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+EXCLUDED_DIRS: set[str] = {}
+EXCLUDED_FILENAMES: set[str] = {"grades.xlsx", "grades.xls"}
+
+
 def list_target_files(data_dir: Path) -> list[Path]:
     files: list[Path] = []
     for p in sorted(data_dir.rglob("*")):
+        if any(part in EXCLUDED_DIRS for part in p.parts):
+            continue
+        if p.name.lower() in EXCLUDED_FILENAMES:
+            continue
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
             files.append(p)
     return files
