@@ -80,6 +80,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rubric-chars", type=int, default=8000)
     parser.add_argument("--max-assignment-chars", type=int, default=6000)
     parser.add_argument("--max-reference-chars", type=int, default=8000)
+    parser.add_argument(
+        "--expected-sections", default=None,
+        help="Comma-separated section IDs to grade, e.g. 'Q1,Q2,Q3'. "
+             "Overrides auto-detection from assignment/student text.",
+    )
     parser.add_argument("--grading-model", default="gpt-4o-2024-11-20", help="LLM used in grade mode")
     parser.add_argument("--max-lecture-chars", type=int, default=12000)
     parser.add_argument("--max-student-chars", type=int, default=20000)
@@ -295,6 +300,7 @@ def main() -> int:
         out_dir = run_root / "grading"
         rubric_file = Path(args.rubric_file).expanduser().resolve() if args.rubric_file else None
         assignment_file = Path(args.assignment_file).expanduser().resolve() if args.assignment_file else None
+        sections_override = [s.strip() for s in args.expected_sections.split(",")] if args.expected_sections else None
         out_path = run_grading(
             retrieval_jsonl=retrieval_jsonl,
             chunks_jsonl=chunks_jsonl,
@@ -312,6 +318,7 @@ def main() -> int:
             max_rubric_chars=int(args.max_rubric_chars),
             max_assignment_chars=int(args.max_assignment_chars),
             max_reference_chars=int(args.max_reference_chars),
+            expected_sections_override=sections_override,
         )
         print(f"Grading written: {out_path}")
         return 0

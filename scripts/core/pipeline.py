@@ -46,11 +46,11 @@ def infer_source_type(rel_path: str) -> str:
     # Lecture modules: folder contains "lecture" OR filename is "module N"
     if "lecture" in lower or (name.startswith("module") and name.endswith(".pdf")):
         return "lecture"
-    # Rubric files: filename contains "rubric"
-    if "rubric" in name:
+    # Rubric files: filename contains "rubric" OR lives anywhere under an Assignment Rubrics folder
+    if "rubric" in name or "assignment rubric" in lower:
         return "rubric"
-    # Assignment description / reference material inside rubric folders
-    if "assignment rubric" in lower:
+    # Assignment description / reference material
+    if "assignment" in lower:
         return "assignment"
     return "student"
 

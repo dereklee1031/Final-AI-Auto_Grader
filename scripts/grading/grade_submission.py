@@ -603,6 +603,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rubric-chars", type=int, default=8000)
     parser.add_argument("--max-assignment-chars", type=int, default=6000)
     parser.add_argument("--max-reference-chars", type=int, default=8000)
+    parser.add_argument(
+        "--expected-sections",
+        default=None,
+        help="Comma-separated section IDs to grade, e.g. 'Q1,Q2,Q3'. "
+             "Overrides auto-detection from assignment/student text.",
+    )
     return parser.parse_args()
 
 
@@ -624,6 +630,7 @@ def run_grading(
     max_rubric_chars: int = 8000,
     max_assignment_chars: int = 6000,
     max_reference_chars: int = 8000,
+    expected_sections_override: list[str] | None = None,
 ) -> Path:
     """
     Grade a student submission.
@@ -708,10 +715,12 @@ def run_grading(
         if reference_text:
             print(f"Reference material loaded from chunks ({reference_path_filter}): {len(reference_text):,} chars")
 
-    # Prefer sections from assignment instructions (authoritative) over student text.
-    # This ensures that even if a student's text has no numbered headings, the
-    # grader uses the actual assignment questions (Q1-Q4) as the grading template.
-    if assignment_text:
+    # Explicit override takes priority over all auto-detection.
+    if expected_sections_override:
+        expected_sections = expected_sections_override
+        print(f"Expected sections (from override): {expected_sections}")
+    elif assignment_text:
+        # Prefer sections from assignment instructions (authoritative) over student text.
         expected_sections = detect_expected_sections(assignment_text)
         if expected_sections:
             print(f"Expected sections (from assignment): {expected_sections}")
@@ -720,8 +729,10 @@ def run_grading(
     else:
         expected_sections = []
 
-    # Fall back to student text detection only if no assignment sections found.
-    if not expected_sections:
+    # Fall back to student text detection only when there is no assignment text at all.
+    # If assignment_text exists, trust the model to derive sections from rubric+assignment;
+    # don't let the student's file structure (e.g. Excel row headers) override the rubric.
+    if not expected_sections and not assignment_text:
         expected_sections = detect_expected_sections(student_text)
         if expected_sections:
             print(f"Expected sections (from student text): {expected_sections}")
@@ -809,6 +820,8 @@ def main() -> int:
     rubric_file = Path(args.rubric_file).expanduser().resolve() if args.rubric_file else None
     assignment_file = Path(args.assignment_file).expanduser().resolve() if args.assignment_file else None
 
+    sections_override = [s.strip() for s in args.expected_sections.split(",")] if args.expected_sections else None
+
     run_grading(
         retrieval_jsonl=retrieval_jsonl,
         chunks_jsonl=chunks_jsonl,
@@ -825,6 +838,7 @@ def main() -> int:
         reference_path_filter=args.reference_path,
         max_rubric_chars=int(args.max_rubric_chars),
         max_assignment_chars=int(args.max_assignment_chars),
+        expected_sections_override=sections_override,
         max_reference_chars=int(args.max_reference_chars),
     )
     return 0
