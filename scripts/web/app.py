@@ -29,11 +29,11 @@ from werkzeug.utils import secure_filename
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 RUN_PIPELINE = SCRIPTS_DIR / "cli" / "run_pipeline.py"
-OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "final_phase1"
+OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "final_phase2"
 DEFAULT_LECTURE_CHUNKS = (
     OUTPUT_ROOT
-    / "run_01"
-    / "describe_openai_gpt-4o-2024-11-20_v2_semantic"
+    / "lectures_fall"
+    / "describe_openai"
     / "chunks.jsonl"
 )
 DEFAULT_ASSIGNMENT = PROJECT_ROOT / "assignments" / "assignment1_instructions.txt"
@@ -345,19 +345,20 @@ def api_grade():
             steps.append({"step": "Index Lectures", "ok": True, "log": "Reusing shared lecture index (skipped rebuild)."})
 
         # ── 4. Retrieve ──
-        code, out = _run(
-            _cli() + [
-                "--mode", "retrieve",
-                "--chunks-jsonl", str(describe_dir / "chunks.jsonl"),
-                "--output-root", str(OUTPUT_ROOT),
-                "--run-id", run_id,
-                "--chroma-path", str(chroma_path),
-                "--chroma-collection", SHARED_LECTURE_COLLECTION,
-                "--retrieval-top-k", "6",
-                "--retrieval-out-jsonl", str(retrieval_out),
-            ],
-            extra_env={"CHROMA_USE_OPENAI_EMBEDDINGS": "0"},
-        )
+        retrieve_args = _cli() + [
+            "--mode", "retrieve",
+            "--output-root", str(OUTPUT_ROOT),
+            "--run-id", run_id,
+            "--chroma-path", str(chroma_path),
+            "--chroma-collection", SHARED_LECTURE_COLLECTION,
+            "--retrieval-top-k", "6",
+            "--retrieval-out-jsonl", str(retrieval_out),
+        ]
+        if assignment_path and assignment_path.exists():
+            retrieve_args += ["--assignment-file", str(assignment_path)]
+        else:
+            retrieve_args += ["--chunks-jsonl", str(describe_dir / "chunks.jsonl")]
+        code, out = _run(retrieve_args, extra_env={"CHROMA_USE_OPENAI_EMBEDDINGS": "0"})
         steps.append({"step": "Retrieve Context", "ok": code == 0, "log": out[-2000:]})
         if code != 0:
             return jsonify(success=False, error="Context retrieval failed.", steps=steps)

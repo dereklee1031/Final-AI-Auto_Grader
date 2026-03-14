@@ -226,25 +226,39 @@ def main() -> int:
         return 0
 
     if args.mode == "retrieve":
-        from retrieval.chroma_rag import retrieve_lecture_context_for_student_chunks
-
-        if not args.chunks_jsonl:
-            raise SystemExit("--chunks-jsonl is required for retrieve mode")
-        chunks_jsonl = Path(args.chunks_jsonl).expanduser().resolve()
-        if not chunks_jsonl.exists():
-            raise SystemExit(f"chunks.jsonl not found: {chunks_jsonl}")
-
         chroma_path = args.chroma_path or str(run_root / "chroma_db")
         out_jsonl = Path(args.retrieval_out_jsonl).expanduser().resolve()
-        stats = retrieve_lecture_context_for_student_chunks(
-            chroma_path=chroma_path,
-            chroma_collection=args.chroma_collection,
-            student_chunks_jsonl=chunks_jsonl,
-            top_k=args.retrieval_top_k,
-            out_jsonl=out_jsonl,
-        )
-        print(f"Retrieval written: {stats['out_jsonl']}")
-        print(f"Student queries written: {stats['queries_written']}")
+
+        if args.assignment_file:
+            from retrieval.chroma_rag import retrieve_lecture_context_for_assignment
+            assignment_file = Path(args.assignment_file).expanduser().resolve()
+            if not assignment_file.exists():
+                raise SystemExit(f"assignment file not found: {assignment_file}")
+            stats = retrieve_lecture_context_for_assignment(
+                chroma_path=chroma_path,
+                chroma_collection=args.chroma_collection,
+                assignment_file=assignment_file,
+                top_k=args.retrieval_top_k,
+                out_jsonl=out_jsonl,
+            )
+            print(f"Retrieval written: {stats['out_jsonl']}")
+            print(f"Assignment queries written: {stats['queries_written']}")
+        else:
+            from retrieval.chroma_rag import retrieve_lecture_context_for_student_chunks
+            if not args.chunks_jsonl:
+                raise SystemExit("--chunks-jsonl or --assignment-file is required for retrieve mode")
+            chunks_jsonl = Path(args.chunks_jsonl).expanduser().resolve()
+            if not chunks_jsonl.exists():
+                raise SystemExit(f"chunks.jsonl not found: {chunks_jsonl}")
+            stats = retrieve_lecture_context_for_student_chunks(
+                chroma_path=chroma_path,
+                chroma_collection=args.chroma_collection,
+                student_chunks_jsonl=chunks_jsonl,
+                top_k=args.retrieval_top_k,
+                out_jsonl=out_jsonl,
+            )
+            print(f"Retrieval written: {stats['out_jsonl']}")
+            print(f"Student queries written: {stats['queries_written']}")
         return 0
 
     if args.mode == "grade":
