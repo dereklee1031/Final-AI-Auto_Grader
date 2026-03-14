@@ -8,12 +8,16 @@ from typing import Any
 from core.chunking import chunk_text, make_sort_key, sha1_id
 from core.config import SUPPORTED_EXTENSIONS, get_api_key
 from extractors import (
+    extract_docx,
     extract_excel,
     extract_html,
     extract_pdf,
+    extract_pptx,
+    extracted_docx_to_jsonable,
     extracted_excel_to_jsonable,
     extracted_html_to_jsonable,
     extracted_pdf_to_jsonable,
+    extracted_pptx_to_jsonable,
 )
 from storage import try_store_chroma, write_json, write_jsonl, write_per_file_json
 from vision.describer import VisionDescriber, describe_image_with_strategy
@@ -24,7 +28,7 @@ def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-EXCLUDED_DIRS: set[str] = {}
+EXCLUDED_DIRS: set[str] = {"Scores", "Supplemental_Material"}
 EXCLUDED_FILENAMES: set[str] = {"grades.xlsx", "grades.xls"}
 
 
@@ -43,26 +47,37 @@ def list_target_files(data_dir: Path) -> list[Path]:
 def infer_source_type(rel_path: str) -> str:
     lower = rel_path.lower()
     name = Path(rel_path).name.lower()
-    # Lecture modules: folder contains "lecture" OR filename is "module N"
-    if "lecture" in lower or (name.startswith("module") and name.endswith(".pdf")):
+    # Lecture files: path or filename contains "lecture", or filename is "module N.*"
+    if "lecture" in lower or (name.startswith("module") and "." in name):
         return "lecture"
     # Rubric files: filename contains "rubric"
     if "rubric" in name:
         return "rubric"
-    # Assignment description / reference material inside rubric folders
-    if "assignment rubric" in lower:
+    # Everything else under a Rubrics/ folder is assignment description / reference material
+    if "rubrics/" in lower or lower.startswith("rubrics" + "/"):
         return "assignment"
     return "student"
 
 
 def infer_assignment_id(rel_path: str) -> str | None:
     """
-    Extract assignment number from paths like 'Assignment Rubrics/Assignment 1/...'
-    or 'Assignment 1_/Student N/...'.  Returns e.g. '1', '2', or None.
+    Extract assignment identifier from a relative path.
+
+    Handles:
+      Assignment_1 / Assignment 1 / Assignment1  → '1', '2', ...
+      Quiz_1 / Quiz 1                             → 'quiz_1', 'quiz_2', ...
+      Course_Project / Course Project             → 'course_project'
     """
     import re
-    m = re.search(r'[Aa]ssignment\s*(\d+)', rel_path)
-    return m.group(1) if m else None
+    m = re.search(r'[Aa]ssignment[_\s]*(\d+)', rel_path)
+    if m:
+        return m.group(1)
+    m = re.search(r'[Qq]uiz[_\s]*(\d+)', rel_path)
+    if m:
+        return f"quiz_{m.group(1)}"
+    if re.search(r'[Cc]ourse[_\s]*[Pp]roject', rel_path):
+        return "course_project"
+    return None
 
 
 def guess_mime(ext: str) -> str:
@@ -109,6 +124,12 @@ def run_extract(data_dir: Path, run_root: Path, cfg: dict[str, Any]) -> dict[str
             elif ext in {".html", ".htm"}:
                 extracted = extract_html(file_path, rel_path, cfg)
                 payload = extracted_html_to_jsonable(extracted)
+            elif ext == ".docx":
+                extracted = extract_docx(file_path, rel_path, cfg)
+                payload = extracted_docx_to_jsonable(extracted)
+            elif ext == ".pptx":
+                extracted = extract_pptx(file_path, rel_path, cfg)
+                payload = extracted_pptx_to_jsonable(extracted)
             else:
                 continue
 
@@ -525,6 +546,20 @@ def run_describe(
                 "vision_json_fallbacks": 0,
                 "tiled_images": 0,
             }
+
+            # Resume: reuse already-described output without re-calling vision API.
+            cached_describe_path = per_file_dir / f"{rel_path}.extraction.json"
+            if cached_describe_path.exists():
+                cached = json.loads(cached_describe_path.read_text(encoding="utf-8"))
+                chunks = cached.get("chunks", [])
+                fstats = cached.get("stats", fstats)
+                for k in totals:
+                    totals[k] += int(fstats.get(k, 0))
+                fstats["per_file_json"] = str(cached_describe_path)
+                per_file_stats.append(fstats)
+                all_chunks.extend(chunks)
+                print(f"  [resume] {rel_path} — loaded {len(chunks)} cached chunks")
+                continue
 
             if file_type == "pdf":
                 text_blocks = payload.get("text_blocks", [])

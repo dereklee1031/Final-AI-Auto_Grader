@@ -113,6 +113,14 @@ def default_run_id() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
+def _maybe_preprocess(data_dir: Path, run_root: Path) -> Path:
+    """If data_dir contains duplicate (_N) files, build a deduped staging dir."""
+    from utils.preprocess import build_staging_dir, has_duplicates
+    if has_duplicates(data_dir):
+        return build_staging_dir(data_dir, run_root / "staging")
+    return data_dir
+
+
 def build_overrides(args: argparse.Namespace) -> dict[str, object]:
     override_keys = [
         "max_pdf_pages",
@@ -156,6 +164,7 @@ def main() -> int:
         if not args.data_dir:
             raise SystemExit("--data-dir is required for extract mode")
         data_dir = Path(args.data_dir).expanduser().resolve()
+        data_dir = _maybe_preprocess(data_dir, run_root)
         manifest = run_extract(data_dir=data_dir, run_root=run_root, cfg=cfg)
         print(f"Extract complete: {run_root / 'extract' / 'manifest.json'}")
         print(f"Processed files: {manifest.get('processed_file_count')} / {manifest.get('file_count')}")
@@ -195,6 +204,7 @@ def main() -> int:
         if not args.data_dir:
             raise SystemExit("--data-dir is required for full mode")
         data_dir = Path(args.data_dir).expanduser().resolve()
+        data_dir = _maybe_preprocess(data_dir, run_root)
         manifest = run_extract(data_dir=data_dir, run_root=run_root, cfg=cfg)
         extract_dir = run_root / "extract"
         describe_dir = run_root / f"describe_{args.vision_provider}_{args.vision_model}"
