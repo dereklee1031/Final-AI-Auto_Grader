@@ -31,10 +31,10 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 RUN_PIPELINE = SCRIPTS_DIR / "cli" / "run_pipeline.py"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "final_phase1"
 DEFAULT_LECTURE_CHUNKS = (
-    OUTPUT_ROOT
-    / "run_01"
-    / "describe_openai_gpt-4o-2024-11-20_v2_semantic"
-    / "chunks.jsonl"
+    # Hybrid lecture chunks: HTML text blocks + PDF image descriptions (best of both)
+    # HTML gives clean structured text; PDF image chunks add 91 AI-described diagrams/figures
+    # that HTML completely misses (all img alt tags are empty, image files not on disk).
+    OUTPUT_ROOT / "lecture_chunks_hybrid.jsonl"
 )
 DEFAULT_ASSIGNMENT = PROJECT_ROOT / "assignments" / "assignment1_instructions.txt"
 DEFAULT_RUBRIC_DIR = Path(
@@ -42,15 +42,56 @@ DEFAULT_RUBRIC_DIR = Path(
 ).expanduser()
 
 # Shared Chroma DB for lecture content — built once, reused across all grading runs.
-# This avoids re-indexing lectures for every student submission.
-SHARED_LECTURE_CHROMA = OUTPUT_ROOT / "shared_lecture_chroma"
+# Separate DB paths per embedding provider so switching never corrupts an existing index.
+def _embedding_provider() -> str:
+    """
+    Resolve which embedding provider to use.
+    Priority: explicit CHROMA_EMBEDDING_PROVIDER env var → Google (if key present) → default.
+    """
+    explicit = os.getenv("CHROMA_EMBEDDING_PROVIDER", "").strip().lower()
+    if explicit in {"openai", "google", "default"}:
+        return explicit
+    # Auto-select Google when a Gemini/Google API key is available — free and higher quality
+    # than the default local embeddings.
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        return "google"
+    return "default"
+
+def _shared_chroma_dir() -> Path:
+    return OUTPUT_ROOT / f"shared_lecture_chroma_{_embedding_provider()}"
+
+def _embedding_env() -> dict[str, str]:
+    """Pass the resolved provider to child pipeline processes via env var."""
+    return {"CHROMA_EMBEDDING_PROVIDER": _embedding_provider()}
+
+
+def _adaptive_top_k() -> int:
+    """Return retrieval top-k scaled to lecture corpus size.
+    Small corpus (≤100 chunks) → 4, medium (≤500) → 6, large (>500) → 8.
+    This avoids flooding context with noise on small corpora or missing
+    relevant chunks on large ones.
+    """
+    try:
+        chunks_path = DEFAULT_LECTURE_CHUNKS
+        if not chunks_path.exists():
+            return 6
+        count = sum(1 for line in chunks_path.read_text(encoding="utf-8").splitlines() if line.strip())
+        if count <= 100:
+            return 4
+        if count <= 500:
+            return 6
+        return 8
+    except Exception:
+        return 6
+
+SHARED_LECTURE_CHROMA = OUTPUT_ROOT / "shared_lecture_chroma"  # legacy (unused)
 SHARED_LECTURE_COLLECTION = "lecture_v1"
 
 STUDENT_ALLOWED_EXTS = {".pdf", ".pptx", ".xlsx"}
 SUPPORT_ALLOWED_EXTS = {".docx", ".pdf", ".txt", ".md"}
 
 # Load environment from project .env so web app can access API keys without manual exports.
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 # ── provider config ────────────────────────────────────────────────────────
 PROVIDERS = {
@@ -68,7 +109,7 @@ PROVIDERS = {
     },
     "anthropic": {
         "label": "Anthropic Claude",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "color": "#7c3aed",
         "icon": "anthropic",
     },
@@ -121,6 +162,24 @@ def _resolve_selected_path(selected: str, *, allowed_roots: list[Path], allowed_
     return None
 
 
+def _resolve_project_file(selected: str, *, allowed_exts: set[str]) -> Path | None:
+    if not selected:
+        return None
+    try:
+        p = Path(selected).expanduser().resolve()
+    except Exception:
+        return None
+    if not p.exists() or not p.is_file():
+        return None
+    if p.suffix.lower() not in allowed_exts:
+        return None
+    try:
+        p.relative_to(PROJECT_ROOT.resolve())
+    except Exception:
+        return None
+    return p
+
+
 def _run(args: list[str], extra_env: dict | None = None) -> tuple[int, str]:
     env = os.environ.copy()
     if extra_env:
@@ -143,6 +202,48 @@ def _cli() -> list[str]:
     return [sys.executable, str(RUN_PIPELINE)]
 
 
+def _collect_supporting_files(run_root: Path) -> tuple[Path | None, Path | None, str | None]:
+    rubric_file = request.files.get("rubric")
+    assignment_file = request.files.get("assignment")
+    selected_rubric = request.form.get("selected_rubric", "")
+    selected_assignment = request.form.get("selected_assignment", "")
+
+    if rubric_file and rubric_file.filename and not _is_allowed_ext(rubric_file.filename, SUPPORT_ALLOWED_EXTS):
+        return None, None, "Invalid rubric file type. Allowed: DOCX, PDF, TXT, MD."
+    if assignment_file and assignment_file.filename and not _is_allowed_ext(assignment_file.filename, SUPPORT_ALLOWED_EXTS):
+        return None, None, "Invalid assignment file type. Allowed: DOCX, PDF, TXT, MD."
+
+    support_dir = run_root / "supporting"
+    rubric_path = None
+    assignment_path = None
+
+    if rubric_file and rubric_file.filename:
+        support_dir.mkdir(parents=True, exist_ok=True)
+        rubric_path = support_dir / _safe_upload_name(rubric_file.filename)
+        rubric_file.save(str(rubric_path))
+    elif selected_rubric:
+        rubric_path = _resolve_selected_path(
+            selected_rubric,
+            allowed_roots=[DEFAULT_RUBRIC_DIR, PROJECT_ROOT / "assignments"],
+            allowed_exts=SUPPORT_ALLOWED_EXTS,
+        )
+
+    if assignment_file and assignment_file.filename:
+        support_dir.mkdir(parents=True, exist_ok=True)
+        assignment_path = support_dir / _safe_upload_name(assignment_file.filename)
+        assignment_file.save(str(assignment_path))
+    elif selected_assignment:
+        assignment_path = _resolve_selected_path(
+            selected_assignment,
+            allowed_roots=[PROJECT_ROOT / "assignments", DEFAULT_RUBRIC_DIR],
+            allowed_exts=SUPPORT_ALLOWED_EXTS,
+        )
+    elif DEFAULT_ASSIGNMENT.exists():
+        assignment_path = DEFAULT_ASSIGNMENT
+
+    return rubric_path, assignment_path, None
+
+
 # ── Discover available rubric / assignment files ───────────────────────────
 def _discover_files(root: Path, exts: set[str] | None = None) -> list[dict]:
     if not root.exists():
@@ -157,8 +258,9 @@ def _discover_files(root: Path, exts: set[str] | None = None) -> list[dict]:
 
 def _shared_chroma_ready() -> bool:
     """True if the shared lecture Chroma DB has been built and contains data."""
-    chroma_sqlite = SHARED_LECTURE_CHROMA / "chroma.sqlite3"
-    return SHARED_LECTURE_CHROMA.exists() and chroma_sqlite.exists()
+    chroma_dir = _shared_chroma_dir()
+    chroma_sqlite = chroma_dir / "chroma.sqlite3"
+    return chroma_dir.exists() and chroma_sqlite.exists()
 
 
 # ── API routes ─────────────────────────────────────────────────────────────
@@ -190,17 +292,18 @@ def api_index_lectures():
     if not DEFAULT_LECTURE_CHUNKS.exists():
         return jsonify(success=False, error=f"Lecture chunks not found at: {DEFAULT_LECTURE_CHUNKS}"), 404
 
-    SHARED_LECTURE_CHROMA.mkdir(parents=True, exist_ok=True)
+    chroma_dir = _shared_chroma_dir()
+    chroma_dir.mkdir(parents=True, exist_ok=True)
     code, out = _run(
         _cli() + [
             "--mode", "index",
             "--chunks-jsonl", str(DEFAULT_LECTURE_CHUNKS),
-            "--chroma-path", str(SHARED_LECTURE_CHROMA),
+            "--chroma-path", str(chroma_dir),
             "--chroma-collection", SHARED_LECTURE_COLLECTION,
             "--output-root", str(OUTPUT_ROOT),
             "--run-id", "shared_lecture_index",
         ],
-        extra_env={"CHROMA_USE_OPENAI_EMBEDDINGS": "0"},
+        extra_env=_embedding_env(),
     )
     if code != 0:
         return jsonify(success=False, error="Lecture indexing failed.", log=out[-3000:]), 500
@@ -224,26 +327,22 @@ def api_grade():
     if not _is_allowed_ext(student.filename, STUDENT_ALLOWED_EXTS):
         return jsonify(success=False, error="Invalid student file type. Allowed: PDF, PPTX, XLSX."), 400
 
-    rubric_file = request.files.get("rubric")
-    assignment_file = request.files.get("assignment")
-    if rubric_file and rubric_file.filename and not _is_allowed_ext(rubric_file.filename, SUPPORT_ALLOWED_EXTS):
-        return jsonify(success=False, error="Invalid rubric file type. Allowed: DOCX, PDF, TXT, MD."), 400
-    if assignment_file and assignment_file.filename and not _is_allowed_ext(assignment_file.filename, SUPPORT_ALLOWED_EXTS):
-        return jsonify(success=False, error="Invalid assignment file type. Allowed: DOCX, PDF, TXT, MD."), 400
+    describe_provider = request.form.get("describe_provider", "openai")
+    describe_model = request.form.get("describe_model") or PROVIDERS.get(
+        describe_provider, {}
+    ).get("model", "gpt-4o-2024-11-20")
+    grade_provider = request.form.get("grade_provider", "openai")
+    grade_model = request.form.get("grade_model") or PROVIDERS.get(
+        grade_provider, {}
+    ).get("model", "gpt-4o-2024-11-20")
 
-    provider = request.form.get("provider", "openai")
-    model = request.form.get("model") or PROVIDERS.get(provider, {}).get("model", "gpt-4o-2024-11-20")
-
-    key_env_name = PROVIDER_API_KEY_ENV.get(provider)
-    if key_env_name and not os.getenv(key_env_name):
-        return jsonify(
-            success=False,
-            error=f"{key_env_name} is not set. Add it to the project .env file or export it before starting Flask.",
-        ), 400
-
-    # Pre-selected files from dropdowns
-    selected_rubric = request.form.get("selected_rubric", "")
-    selected_assignment = request.form.get("selected_assignment", "")
+    for provider_name in {describe_provider, grade_provider}:
+        key_env_name = PROVIDER_API_KEY_ENV.get(provider_name)
+        if key_env_name and not os.getenv(key_env_name):
+            return jsonify(
+                success=False,
+                error=f"{key_env_name} is not set. Add it to the project .env file or export it before starting Flask.",
+            ), 400
 
     # ── create run directory ──
     run_id = f"web_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
@@ -254,42 +353,18 @@ def api_grade():
     student_path = upload_dir / _safe_upload_name(student.filename)
     student.save(str(student_path))
 
-    support_dir = run_root / "supporting"
-    rubric_path = assignment_path = None
+    rubric_path, assignment_path, support_error = _collect_supporting_files(run_root)
+    if support_error:
+        return jsonify(success=False, error=support_error), 400
 
-    # Uploaded rubric takes precedence over selected
-    if rubric_file and rubric_file.filename:
-        support_dir.mkdir(parents=True, exist_ok=True)
-        rubric_path = support_dir / _safe_upload_name(rubric_file.filename)
-        rubric_file.save(str(rubric_path))
-    elif selected_rubric:
-        rubric_path = _resolve_selected_path(
-            selected_rubric,
-            allowed_roots=[DEFAULT_RUBRIC_DIR, PROJECT_ROOT / "assignments"],
-            allowed_exts=SUPPORT_ALLOWED_EXTS,
-        )
-
-    if assignment_file and assignment_file.filename:
-        support_dir.mkdir(parents=True, exist_ok=True)
-        assignment_path = support_dir / _safe_upload_name(assignment_file.filename)
-        assignment_file.save(str(assignment_path))
-    elif selected_assignment:
-        assignment_path = _resolve_selected_path(
-            selected_assignment,
-            allowed_roots=[PROJECT_ROOT / "assignments", DEFAULT_RUBRIC_DIR],
-            allowed_exts=SUPPORT_ALLOWED_EXTS,
-        )
-    elif DEFAULT_ASSIGNMENT.exists():
-        assignment_path = DEFAULT_ASSIGNMENT
-
-    safe_model = _safe(model)
+    safe_describe_model = _safe(describe_model)
     extract_dir = run_root / "extract"
-    describe_dir = run_root / f"describe_student_{provider}_{safe_model}"
+    describe_dir = run_root / f"describe_student_{describe_provider}_{safe_describe_model}"
     retrieval_out = run_root / "retrieval.jsonl"
 
     # Use shared Chroma DB if it exists; otherwise fall back to per-run DB
     use_shared_chroma = _shared_chroma_ready() and DEFAULT_LECTURE_CHUNKS.exists()
-    chroma_path = SHARED_LECTURE_CHROMA if use_shared_chroma else run_root / "chroma_db"
+    chroma_path = _shared_chroma_dir() if use_shared_chroma else run_root / "chroma_db"
 
     steps: list[dict] = []
 
@@ -312,8 +387,8 @@ def api_grade():
             "--mode", "describe",
             "--extract-dir", str(extract_dir),
             "--describe-dir", str(describe_dir),
-            "--vision-provider", provider,
-            "--vision-model", model,
+            "--vision-provider", describe_provider,
+            "--vision-model", describe_model,
             "--prompt-version", "verbose_v2",
         ]
     )
@@ -326,17 +401,18 @@ def api_grade():
     if has_lectures:
         if not use_shared_chroma:
             # No shared DB yet — build it now (also saves it as shared for future runs)
-            SHARED_LECTURE_CHROMA.mkdir(parents=True, exist_ok=True)
+            chroma_dir = _shared_chroma_dir()
+            chroma_dir.mkdir(parents=True, exist_ok=True)
             code, out = _run(
                 _cli() + [
                     "--mode", "index",
                     "--chunks-jsonl", str(DEFAULT_LECTURE_CHUNKS),
                     "--output-root", str(OUTPUT_ROOT),
                     "--run-id", run_id,
-                    "--chroma-path", str(SHARED_LECTURE_CHROMA),
+                    "--chroma-path", str(chroma_dir),
                     "--chroma-collection", SHARED_LECTURE_COLLECTION,
                 ],
-                extra_env={"CHROMA_USE_OPENAI_EMBEDDINGS": "0"},
+                extra_env=_embedding_env(),
             )
             steps.append({"step": "Index Lectures", "ok": code == 0, "log": out[-2000:]})
             if code != 0:
@@ -353,10 +429,10 @@ def api_grade():
                 "--run-id", run_id,
                 "--chroma-path", str(chroma_path),
                 "--chroma-collection", SHARED_LECTURE_COLLECTION,
-                "--retrieval-top-k", "6",
+                "--retrieval-top-k", str(_adaptive_top_k()),
                 "--retrieval-out-jsonl", str(retrieval_out),
             ],
-            extra_env={"CHROMA_USE_OPENAI_EMBEDDINGS": "0"},
+            extra_env=_embedding_env(),
         )
         steps.append({"step": "Retrieve Context", "ok": code == 0, "log": out[-2000:]})
         if code != 0:
@@ -374,8 +450,8 @@ def api_grade():
         "--retrieval-out-jsonl", str(retrieval_out),
         "--output-root", str(OUTPUT_ROOT),
         "--run-id", run_id,
-        "--grading-provider", provider,
-        "--grading-model", model,
+        "--grading-provider", grade_provider,
+        "--grading-model", grade_model,
         "--student-path", student_path.name,
     ]
     if assignment_path and assignment_path.exists():
@@ -392,6 +468,150 @@ def api_grade():
     grades_path = run_root / "grading" / "grades.json"
     if not grades_path.exists():
         return jsonify(success=False, error="grades.json not produced.", steps=steps)
+
+    grades = json.loads(grades_path.read_text(encoding="utf-8"))
+    return jsonify(success=True, grades=grades, run_id=run_id, steps=steps)
+
+
+@app.route("/api/describe", methods=["POST"])
+def api_describe():
+    student = (
+        request.files.get("student_pdf")
+        or request.files.get("student_submission")
+        or request.files.get("student_file")
+    )
+    if not student or not student.filename:
+        return jsonify(success=False, error="Please upload a student submission file."), 400
+    if not _is_allowed_ext(student.filename, STUDENT_ALLOWED_EXTS):
+        return jsonify(success=False, error="Invalid student file type. Allowed: PDF, PPTX, XLSX."), 400
+
+    provider = request.form.get("describe_provider", "openai")
+    model = request.form.get("describe_model") or PROVIDERS.get(provider, {}).get("model", "gpt-4o-2024-11-20")
+
+    key_env_name = PROVIDER_API_KEY_ENV.get(provider)
+    if key_env_name and not os.getenv(key_env_name):
+        return jsonify(
+            success=False,
+            error=f"{key_env_name} is not set. Add it to the project .env file or export it before starting Flask.",
+        ), 400
+
+    run_id = f"web_describe_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+    run_root = OUTPUT_ROOT / run_id
+    upload_dir = run_root / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    student_path = upload_dir / _safe_upload_name(student.filename)
+    student.save(str(student_path))
+
+    safe_model = _safe(model)
+    extract_dir = run_root / "extract"
+    describe_dir = run_root / f"describe_student_{provider}_{safe_model}"
+    steps: list[dict] = []
+
+    code, out = _run(
+        _cli() + [
+            "--mode", "extract",
+            "--data-dir", str(upload_dir),
+            "--output-root", str(OUTPUT_ROOT),
+            "--run-id", run_id,
+        ]
+    )
+    steps.append({"step": "Extract Submission", "ok": code == 0, "log": out[-2000:]})
+    if code != 0:
+        return jsonify(success=False, error="Submission extraction failed.", steps=steps, log=out[-1000:])
+
+    code, out = _run(
+        _cli() + [
+            "--mode", "describe",
+            "--extract-dir", str(extract_dir),
+            "--describe-dir", str(describe_dir),
+            "--vision-provider", provider,
+            "--vision-model", model,
+            "--prompt-version", "verbose_v2",
+        ]
+    )
+    steps.append({"step": "Describe Submission", "ok": code == 0, "log": out[-2000:]})
+    if code != 0:
+        return jsonify(success=False, error="Describe failed.", steps=steps, log=out[-1000:])
+
+    summary_path = describe_dir / "summary.json"
+    if not summary_path.exists():
+        return jsonify(success=False, error="summary.json not produced.", steps=steps), 500
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    return jsonify(
+        success=True,
+        run_id=run_id,
+        steps=steps,
+        describe={
+            "summary": summary,
+            "summary_path": str(summary_path),
+            "chunks_jsonl": str(describe_dir / "chunks.jsonl"),
+            "describe_dir": str(describe_dir),
+        },
+    )
+
+
+@app.route("/api/grade-existing", methods=["POST"])
+def api_grade_existing():
+    provider = request.form.get("provider", "openai")
+    model = request.form.get("model") or PROVIDERS.get(provider, {}).get("model", "gpt-4o-2024-11-20")
+    student_filter = (request.form.get("existing_student_path") or "").strip()
+    chunks_jsonl_raw = (request.form.get("existing_chunks_jsonl") or "").strip()
+    retrieval_jsonl_raw = (request.form.get("existing_retrieval_jsonl") or "").strip()
+
+    if not chunks_jsonl_raw:
+        return jsonify(success=False, error="Existing chunks.jsonl path is required."), 400
+    if not retrieval_jsonl_raw:
+        return jsonify(success=False, error="Existing retrieval.jsonl path is required."), 400
+    if not student_filter:
+        return jsonify(success=False, error="Student path filter is required for grade-only runs."), 400
+
+    chunks_jsonl = _resolve_project_file(chunks_jsonl_raw, allowed_exts={".jsonl"})
+    retrieval_jsonl = _resolve_project_file(retrieval_jsonl_raw, allowed_exts={".jsonl"})
+    if chunks_jsonl is None:
+        return jsonify(success=False, error="Existing chunks.jsonl path is invalid or outside the project."), 400
+    if retrieval_jsonl is None:
+        return jsonify(success=False, error="Existing retrieval.jsonl path is invalid or outside the project."), 400
+
+    key_env_name = PROVIDER_API_KEY_ENV.get(provider)
+    if key_env_name and not os.getenv(key_env_name):
+        return jsonify(
+            success=False,
+            error=f"{key_env_name} is not set. Add it to the project .env file or export it before starting Flask.",
+        ), 400
+
+    run_id = f"web_gradeexisting_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+    run_root = OUTPUT_ROOT / run_id
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    rubric_path, assignment_path, support_error = _collect_supporting_files(run_root)
+    if support_error:
+        return jsonify(success=False, error=support_error), 400
+
+    grade_args = _cli() + [
+        "--mode", "grade",
+        "--chunks-jsonl", str(chunks_jsonl),
+        "--retrieval-out-jsonl", str(retrieval_jsonl),
+        "--output-root", str(OUTPUT_ROOT),
+        "--run-id", run_id,
+        "--grading-provider", provider,
+        "--grading-model", model,
+        "--student-path", student_filter,
+    ]
+    if assignment_path and assignment_path.exists():
+        grade_args += ["--assignment-file", str(assignment_path)]
+    if rubric_path and rubric_path.exists():
+        grade_args += ["--rubric-file", str(rubric_path)]
+
+    code, out = _run(grade_args)
+    steps = [{"step": "Grade Existing Describe Output", "ok": code == 0, "log": out[-2000:]}]
+    if code != 0:
+        return jsonify(success=False, error="Grade-only run failed.", steps=steps, log=out[-1000:]), 500
+
+    grades_path = run_root / "grading" / "grades.json"
+    if not grades_path.exists():
+        return jsonify(success=False, error="grades.json not produced.", steps=steps), 500
 
     grades = json.loads(grades_path.read_text(encoding="utf-8"))
     return jsonify(success=True, grades=grades, run_id=run_id, steps=steps)
@@ -484,13 +704,509 @@ def api_export_csv():
     )
 
 
+# ── Web Link Indexer ─────────────────────────────────────────────────────────
+@app.route("/api/add-web-links", methods=["POST"])
+def api_add_web_links():
+    """
+    Fetch URLs, summarize each page to 2-3 paragraphs using an LLM,
+    append the summaries to the lecture chunks file, and rebuild the Chroma index.
+    """
+    import hashlib, textwrap
+    try:
+        import requests as _requests
+    except ImportError:
+        return jsonify(success=False, error="'requests' library not installed. Run: pip install requests"), 500
+    try:
+        from bs4 import BeautifulSoup as _BS
+    except ImportError:
+        return jsonify(success=False, error="'beautifulsoup4' not installed."), 500
+
+    data = request.get_json(silent=True) or {}
+    urls: list[str] = [u.strip() for u in (data.get("urls") or []) if u.strip()]
+    provider: str = str(data.get("provider") or "openai").lower()
+    model: str = str(data.get("model") or "").strip()
+
+    if not urls:
+        return jsonify(success=False, error="No URLs provided."), 400
+
+    api_key = None
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not model:
+            model = "gpt-4o-mini"   # cheap but good for summarisation
+    elif provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not model:
+            model = "gemini-2.0-flash"
+    elif provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not model:
+            model = "claude-haiku-4-5"
+    else:
+        return jsonify(success=False, error=f"Unknown provider: {provider}"), 400
+
+    if not api_key:
+        return jsonify(success=False, error=f"No API key found for provider '{provider}'."), 400
+
+    SUMMARY_PROMPT = (
+        "You are a teaching assistant summarizing a web page for students in a graduate course. "
+        "Read the page content below and write a concise summary of 2-3 paragraphs. "
+        "Focus only on the educational concepts, facts, definitions, and processes relevant to the topic. "
+        "Ignore navigation menus, advertisements, author bios, and unrelated content. "
+        "Write in plain prose — no bullet points, no headings."
+    )
+
+    def _fetch_page_text(url: str) -> tuple[str, str]:
+        """Fetch a URL and return (title, extracted_text). Raises on failure."""
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; GradeAI-Bot/1.0)"}
+        resp = _requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+        resp.raise_for_status()
+        soup = _BS(resp.text, "html.parser")
+        # Extract title
+        title_tag = soup.find("title")
+        title = title_tag.get_text(" ", strip=True) if title_tag else url
+        # Remove chrome
+        for tag in soup.find_all(["script", "style", "nav", "header", "footer",
+                                   "aside", "noscript", "button", "form"]):
+            tag.decompose()
+        # Get main text
+        tags = soup.find_all(["h1","h2","h3","h4","p","li","blockquote","td","th","pre","code","dt","dd"])
+        lines = [t.get_text(" ", strip=True) for t in tags]
+        text = "\n".join(l for l in lines if len(l) > 20)
+        return title, text[:12000]   # cap input to ~12k chars to stay within token limits
+
+    def _summarize(title: str, text: str) -> str:
+        """Call the chosen LLM to summarize the page text."""
+        user_msg = f"Page title: {title}\n\nPage content:\n{text}"
+        if provider == "openai":
+            import urllib.request, urllib.error
+            body = json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SUMMARY_PROMPT},
+                    {"role": "user",   "content": user_msg},
+                ],
+                "max_tokens": 600,
+                "temperature": 0.3,
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=body,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                resp_data = json.loads(r.read())
+            return resp_data["choices"][0]["message"]["content"].strip()
+
+        elif provider == "gemini":
+            import urllib.request
+            url_api = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            body = json.dumps({
+                "contents": [{"parts": [{"text": SUMMARY_PROMPT + "\n\n" + user_msg}]}],
+                "generationConfig": {"maxOutputTokens": 600, "temperature": 0.3},
+            }).encode()
+            req = urllib.request.Request(url_api, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                resp_data = json.loads(r.read())
+            return resp_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+        elif provider == "anthropic":
+            import urllib.request
+            body = json.dumps({
+                "model": model,
+                "system": SUMMARY_PROMPT,
+                "messages": [{"role": "user", "content": user_msg}],
+                "max_tokens": 600,
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=body,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                resp_data = json.loads(r.read())
+            return resp_data["content"][0]["text"].strip()
+
+        return ""
+
+    from core.chunking import chunk_text, sha1_id, make_sort_key
+
+    results = []
+    new_chunks: list[dict] = []
+
+    for url in urls:
+        try:
+            title, page_text = _fetch_page_text(url)
+            if len(page_text) < 50:
+                results.append({"url": url, "ok": False, "error": "Page too short or empty after extraction."})
+                continue
+
+            summary = _summarize(title, page_text)
+            if not summary:
+                results.append({"url": url, "ok": False, "error": "LLM returned empty summary."})
+                continue
+
+            # Build chunk(s) from the summary
+            slug = re.sub(r"[^a-z0-9]+", "_", url.lower())[:60]
+            for ci, piece in enumerate(chunk_text(summary, 1800, 140), 1):
+                if len(piece) < 20:
+                    continue
+                cid = sha1_id(f"web_link|{url}|chunk={ci}")
+                new_chunks.append({
+                    "id": cid,
+                    "content": piece,
+                    "metadata": {
+                        "filename": slug + ".web",
+                        "source_path": url,
+                        "source_type": "lecture",
+                        "format": "web_summary",
+                        "page_number": 1,
+                        "block_index": ci,
+                        "sort_key": make_sort_key(1, ci),
+                        "document_order": ci,
+                        "content_type": "text",
+                        "element_tag": "web_summary",
+                        "web_url": url,
+                        "web_title": title,
+                        "chunk_index_in_block": ci,
+                        "image_quality": None, "image_width_px": None,
+                        "image_height_px": None, "image_total_pixels": None,
+                        "image_aspect_ratio": None, "is_tiled": None,
+                        "tile_count": None, "gpt4o_called": False, "quality_warning": None,
+                    },
+                })
+
+            results.append({"url": url, "ok": True, "title": title, "summary_chars": len(summary), "chunks": ci})
+
+        except Exception as exc:
+            results.append({"url": url, "ok": False, "error": str(exc)[:200]})
+
+    if not new_chunks:
+        return jsonify(success=False, error="No chunks generated from provided URLs.", results=results)
+
+    # Append new chunks to the lecture chunks file
+    chunks_path = DEFAULT_LECTURE_CHUNKS
+    if not chunks_path.exists():
+        chunks_path.parent.mkdir(parents=True, exist_ok=True)
+        chunks_path.write_text("", encoding="utf-8")
+
+    # De-duplicate: don't re-add chunks already in the file
+    existing_ids: set[str] = set()
+    for line in chunks_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            try:
+                existing_ids.add(json.loads(line)["id"])
+            except Exception:
+                pass
+
+    added_count = 0
+    with chunks_path.open("a", encoding="utf-8") as f:
+        for chunk in new_chunks:
+            if chunk["id"] not in existing_ids:
+                f.write(json.dumps(chunk, ensure_ascii=True) + "\n")
+                added_count += 1
+
+    if added_count == 0:
+        return jsonify(success=True, message="All URLs already indexed (no new chunks added).", results=results)
+
+    # Rebuild Chroma index with the new chunks
+    chroma_dir = _shared_chroma_dir()
+    chroma_dir.mkdir(parents=True, exist_ok=True)
+    code, out = _run(
+        _cli() + [
+            "--mode", "index",
+            "--chunks-jsonl", str(chunks_path),
+            "--chroma-path", str(chroma_dir),
+            "--chroma-collection", SHARED_LECTURE_COLLECTION,
+            "--output-root", str(OUTPUT_ROOT),
+            "--run-id", "shared_lecture_index",
+        ],
+        extra_env=_embedding_env(),
+    )
+
+    if code != 0:
+        return jsonify(
+            success=False,
+            error="Chunks saved but Chroma re-index failed.",
+            added_chunks=added_count,
+            results=results,
+            log=out[-1000:],
+        ), 500
+
+    return jsonify(
+        success=True,
+        message=f"Indexed {added_count} new chunk(s) from {sum(1 for r in results if r['ok'])} URL(s).",
+        added_chunks=added_count,
+        results=results,
+    )
+
+
+
+# ── Web Link Summarizer (demo: fetch + summarise, no indexing) ───────────────
+@app.route("/api/summarize-web-link", methods=["POST"])
+def api_summarize_web_link():
+    """
+    Fetch a URL, extract its text, and summarize it to 2-3 paragraphs using an LLM.
+    Returns the title, raw extracted text preview, and the full AI summary.
+    No indexing — purely for demonstration of extraction quality.
+    """
+    try:
+        import requests as _requests
+    except ImportError:
+        return jsonify(success=False, error="'requests' library not installed."), 500
+    try:
+        from bs4 import BeautifulSoup as _BS
+    except ImportError:
+        return jsonify(success=False, error="'beautifulsoup4' not installed."), 500
+
+    data = request.get_json(silent=True) or {}
+    url: str = str(data.get("url") or "").strip()
+    provider: str = str(data.get("provider") or "openai").lower()
+    model: str = str(data.get("model") or "").strip()
+
+    if not url:
+        return jsonify(success=False, error="No URL provided."), 400
+
+    api_key = None
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not model:
+            model = "gpt-4o-mini"
+    elif provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not model:
+            model = "gemini-2.0-flash"
+    elif provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not model:
+            model = "claude-haiku-4-5"
+    else:
+        return jsonify(success=False, error=f"Unknown provider: {provider}"), 400
+
+    if not api_key:
+        return jsonify(success=False, error=f"No API key found for provider '{provider}'."), 400
+
+    SUMMARY_PROMPT = (
+        "You are a teaching assistant summarizing a web page for students in a graduate course. "
+        "Read the page content below and write a concise summary of 2-3 paragraphs. "
+        "Focus only on the educational concepts, facts, definitions, and processes relevant to the topic. "
+        "Ignore navigation menus, advertisements, author bios, and unrelated content. "
+        "Write in plain prose — no bullet points, no headings."
+    )
+
+    def _fetch_page_text(u: str) -> tuple[str, str, list[str]]:
+        """Returns (title, full_text_for_llm, extracted_lines_preview)."""
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; GradeAI-Bot/1.0)"}
+        resp = _requests.get(u, headers=headers, timeout=20, allow_redirects=True)
+        resp.raise_for_status()
+        soup = _BS(resp.text, "html.parser")
+        title_tag = soup.find("title")
+        title = title_tag.get_text(" ", strip=True) if title_tag else u
+        for tag in soup.find_all(["script", "style", "nav", "header", "footer",
+                                   "aside", "noscript", "button", "form"]):
+            tag.decompose()
+        tags = soup.find_all(["h1","h2","h3","h4","p","li","blockquote","td","th","pre","code","dt","dd"])
+        lines = [t.get_text(" ", strip=True) for t in tags if len(t.get_text(" ", strip=True)) > 20]
+        text = "\n".join(lines)
+        return title, text[:12000], lines[:30]   # preview = first 30 meaningful lines
+
+    def _summarize(title: str, text: str) -> str:
+        user_msg = f"Page title: {title}\n\nPage content:\n{text}"
+        if provider == "openai":
+            import urllib.request
+            body = json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SUMMARY_PROMPT},
+                    {"role": "user",   "content": user_msg},
+                ],
+                "max_tokens": 700, "temperature": 0.3,
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions", data=body,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read())["choices"][0]["message"]["content"].strip()
+
+        elif provider == "gemini":
+            import urllib.request
+            url_api = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            body = json.dumps({
+                "contents": [{"parts": [{"text": SUMMARY_PROMPT + "\n\n" + user_msg}]}],
+                "generationConfig": {"maxOutputTokens": 700, "temperature": 0.3},
+            }).encode()
+            req = urllib.request.Request(url_api, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+        elif provider == "anthropic":
+            import urllib.request
+            body = json.dumps({
+                "model": model, "system": SUMMARY_PROMPT,
+                "messages": [{"role": "user", "content": user_msg}],
+                "max_tokens": 700,
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages", data=body,
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                         "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read())["content"][0]["text"].strip()
+        return ""
+
+    try:
+        title, page_text, preview_lines = _fetch_page_text(url)
+        if len(page_text) < 50:
+            return jsonify(success=False, error="Page too short or empty after extraction.")
+        summary = _summarize(title, page_text)
+        if not summary:
+            return jsonify(success=False, error="LLM returned empty summary.")
+        return jsonify(
+            success=True,
+            url=url,
+            title=title,
+            extracted_chars=len(page_text),
+            extracted_lines=len(preview_lines),
+            raw_preview=preview_lines,   # first ~30 lines extracted from the page
+            summary=summary,
+            model_used=model,
+            provider=provider,
+        )
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc)[:300])
+
+
+# ── Lecture Index Inspector ──────────────────────────────────────────────────
+@app.route("/api/lecture-index-stats")
+def api_lecture_index_stats():
+    """Return detailed stats about what's in the lecture index for the professor."""
+    from collections import defaultdict
+
+    if not DEFAULT_LECTURE_CHUNKS.exists():
+        return jsonify(success=False, error="No lecture chunks file found.")
+
+    lines = [l for l in DEFAULT_LECTURE_CHUNKS.read_text(encoding="utf-8").splitlines() if l.strip()]
+    total_chunks = len(lines)
+
+    # Aggregate per file
+    files: dict = defaultdict(lambda: {
+        "filename": "", "format": "", "chunks": 0,
+        "tag_counts": defaultdict(int), "sample": "",
+        "is_web": False, "web_url": "", "web_title": "",
+    })
+    format_counts: dict = defaultdict(int)
+    tag_counts: dict = defaultdict(int)
+    total_chars = 0
+
+    for line in lines:
+        try:
+            c = json.loads(line)
+        except Exception:
+            continue
+        meta = c.get("metadata", {}) or {}
+        fname = meta.get("filename", "unknown")
+        fmt = meta.get("format", "unknown")
+        tag = meta.get("element_tag") or fmt
+        content = str(c.get("content", ""))
+
+        f = files[fname]
+        f["filename"] = fname
+        f["format"] = fmt
+        f["chunks"] += 1
+        f["tag_counts"][tag] = f["tag_counts"].get(tag, 0) + 1
+        if not f["sample"]:
+            f["sample"] = content[:200]
+        if fmt == "web_summary":
+            f["is_web"] = True
+            f["web_url"] = meta.get("web_url", "")
+            f["web_title"] = meta.get("web_title", "")
+
+        format_counts[fmt] += 1
+        tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        total_chars += len(content)
+
+    # Sort files: web summaries last, then by chunk count desc
+    sorted_files = sorted(
+        files.values(),
+        key=lambda x: (x["is_web"], -x["chunks"])
+    )
+    # Make tag_counts serialisable (defaultdict → dict)
+    for f in sorted_files:
+        f["tag_counts"] = dict(f["tag_counts"])
+
+    return jsonify(
+        success=True,
+        total_chunks=total_chunks,
+        total_files=len(files),
+        total_chars=total_chars,
+        avg_chunk_chars=round(total_chars / max(1, total_chunks)),
+        format_breakdown=dict(format_counts),
+        tag_breakdown=dict(tag_counts),
+        chroma_ready=_shared_chroma_ready(),
+        embedding_provider=_embedding_provider(),
+        files=sorted_files,
+    )
+
+
+@app.route("/api/lecture-search")
+def api_lecture_search():
+    """Test RAG retrieval: given a query, return the top lecture chunks retrieved."""
+    query = request.args.get("q", "").strip()
+    top_k = int(request.args.get("k", "5"))
+    if not query:
+        return jsonify(success=False, error="No query provided.")
+    if not _shared_chroma_ready():
+        return jsonify(success=False, error="Lecture index not ready. Click 'Build Lecture Index' first.")
+
+    try:
+        import chromadb
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from storage.chroma_store import _build_embedding_function
+
+        chroma_path = str(_shared_chroma_dir())
+        client = chromadb.PersistentClient(path=chroma_path)
+        embed_fn = _build_embedding_function()
+        if embed_fn:
+            col = client.get_or_create_collection("lecture_v1", embedding_function=embed_fn)
+        else:
+            col = client.get_or_create_collection("lecture_v1")
+
+        result = col.query(
+            query_texts=[query],
+            n_results=min(top_k, col.count()),
+            include=["documents", "metadatas", "distances"],
+        )
+        hits = []
+        docs = (result.get("documents") or [[]])[0]
+        metas = (result.get("metadatas") or [[]])[0]
+        dists = (result.get("distances") or [[]])[0]
+        for doc, meta, dist in zip(docs, metas, dists):
+            hits.append({
+                "content": doc[:400],
+                "filename": (meta or {}).get("filename", ""),
+                "element_tag": (meta or {}).get("element_tag", ""),
+                "distance": round(float(dist), 4),
+                "relevance_pct": round(max(0, (1 - float(dist) / 2)) * 100, 1),
+            })
+        return jsonify(success=True, query=query, hits=hits)
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc))
+
+
 # ── Status endpoint ─────────────────────────────────────────────────────────
 @app.route("/api/status")
 def api_status():
     return jsonify({
         "lecture_chunks_exist": DEFAULT_LECTURE_CHUNKS.exists(),
         "shared_chroma_ready": _shared_chroma_ready(),
-        "shared_chroma_path": str(SHARED_LECTURE_CHROMA),
+        "shared_chroma_path": str(_shared_chroma_dir()),
+        "embedding_provider": _embedding_provider(),
         "lecture_chunks_path": str(DEFAULT_LECTURE_CHUNKS),
     })
 
