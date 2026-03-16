@@ -520,6 +520,11 @@ def run_describe(
                     units.append({"kind": "image", "order": int(im.get("document_order", 0)), "item": im})
                 units.sort(key=lambda u: u["order"])
 
+                # PDFs exported from presentations lose shape structure, so short
+                # text labels (node labels, callouts, etc.) must not be dropped.
+                # Match the PPTX threshold of 5 so equivalent content scores the same.
+                pdf_min_text_chars = 5
+
                 max_doc_order = 0
                 for unit in units:
                     max_doc_order = max(max_doc_order, int(unit["order"]))
@@ -537,7 +542,7 @@ def run_describe(
                             text=str(t["text"]),
                             max_chars=int(cfg["text_chunk_chars"]),
                             overlap=int(cfg["text_chunk_overlap"]),
-                            min_text_chars=int(cfg["min_text_chars"]),
+                            min_text_chars=pdf_min_text_chars,
                             extra_meta={"block_id": t.get("block_id"), "bbox": t.get("bbox")},
                         )
                     else:

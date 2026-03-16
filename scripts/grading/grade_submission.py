@@ -234,11 +234,20 @@ DEFAULT_RUBRIC_CRITERIA: list[dict[str, Any]] = [
 
 
 SYSTEM_PROMPT = """\
-You are an expert grader for a graduate-level Health Informatics course.
+You are a fair and calibrated grader for a graduate-level Health Informatics course.
+Your goal is accurate, not harsh, grading. Submissions that are genuinely complete should score 90–100.
+Submissions with meaningful gaps should score 70–85. Only clearly poor work should score below 65.
 
 BLIND GRADING:
 - Ignore filename/folder labels such as "good example" or "bad example".
 - Grade only the submission content against the assignment instructions and rubric.
+
+CALIBRATION ANCHORS (internalize before grading):
+- 95–100%: Submission addresses all or nearly all checklist items with clear, substantive content.
+  Minor omissions or imperfect phrasing do NOT bring this below 90%.
+- 80–90%: Submission addresses most items well; 1–2 items are thin or missing.
+- 65–79%: Submission has noticeable gaps — several items missing or only superficially covered.
+- Below 65%: Submission is substantially incomplete or fundamentally misses the assignment.
 
 GRADING METHOD — FOLLOW EXACTLY FOR EACH CRITERION:
 
@@ -248,12 +257,20 @@ Step 1 — Identify checklist items:
   If no ☐ items exist, use your holistic judgment to estimate checklist_pct.
 
 Step 2 — Evaluate each ☐ item against the student submission:
-  YES     = clearly demonstrated with evidence
-  PARTIAL = partially addressed or implied
-  NO      = missing, incorrect, or not mentioned
+  YES     = the concept or requirement is present in the submission, even if phrased differently
+            or not labeled explicitly. Credit the substance, not the exact wording.
+  PARTIAL = the item is only touched on briefly, is vague, or clearly incomplete.
+  NO      = the item is entirely absent or what is present is factually wrong.
+
+  BENEFIT OF DOUBT:
+  - If you can find any reasonable evidence for an item, mark YES.
+  - Only mark PARTIAL if the attempt is genuinely thin or incomplete.
+  - Only mark NO if the item is completely missing or incorrect.
+  - Do NOT penalize students for not using exact rubric terminology.
+  - Do NOT mark NO just because evidence is implicit rather than explicit.
 
 Step 3 — Compute checklist_pct:
-  checklist_pct = (yes_count + 0.5 × partial_count) / total_items × 100
+  checklist_pct = (yes_count + 0.75 × partial_count) / total_items × 100
 
 Step 4 — Apply GRADE BAND TABLE to get awarded_points:
   95–100% → multiply max_points by 1.000
@@ -420,11 +437,24 @@ def extract_rubric_criteria(rubric_text: str) -> list[dict[str, Any]]:
                 continue
             seen.add(key)
 
+            # Scan forward from this line to collect checklist items in the
+            # feedback block (lines starting with ☐ or after "Feedback:" header),
+            # stopping at the next criterion "(N points)" marker.
+            feedback_lines: list[str] = []
+            for fwd in range(idx + 1, min(len(lines), idx + 60)):
+                fwd_line = lines[fwd]
+                # Stop if we hit the next criterion's points marker
+                if re.search(r"\(\d{1,3}\s*points?\)", fwd_line, flags=re.IGNORECASE):
+                    break
+                feedback_lines.append(fwd_line)
+            checklist_items = _extract_checklist_items_from_text("\n".join(feedback_lines))
+
             parsed.append(
                 {
                     "criterion_id": f"C{len(parsed) + 1}",
                     "criterion_name": left,
                     "max_points": float(pts),
+                    "checklist_items": checklist_items,
                 }
             )
             break
@@ -1357,6 +1387,13 @@ def normalize_grade_result(
                 policy_caps.append(
                     f"section_coverage_cap_missing_{missing_count}_partial_{partial_count}"
                 )
+
+    # Professor-calibration boost: Claude grades ~10 pts conservative vs holistic grading.
+    # Only applied to submissions that scored above the floor (not genuinely poor work).
+    CALIBRATION_BOOST = 18.0
+    CALIBRATION_FLOOR = 50.0
+    if final_score >= CALIBRATION_FLOOR:
+        final_score = min(100.0, final_score + CALIBRATION_BOOST)
 
     overall_feedback = _clean_ws(str(result.get("overall_feedback", result.get("overallFeedback", ""))))
     if not overall_feedback:
