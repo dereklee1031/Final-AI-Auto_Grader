@@ -38,7 +38,7 @@ DEFAULT_LECTURE_CHUNKS = (
 )
 DEFAULT_ASSIGNMENT = PROJECT_ROOT / "assignments" / "assignment1_instructions.txt"
 DEFAULT_RUBRIC_DIR = Path(
-    os.getenv("AUTO_GRADER_RUBRIC_DIR", "/Users/sai/Downloads/Spring 2026 2/Assignment Rubrics")
+    os.getenv("AUTO_GRADER_RUBRIC_DIR", str(PROJECT_ROOT / "assignments"))
 ).expanduser()
 
 # Shared Chroma DB for lecture content — built once, reused across all grading runs.
