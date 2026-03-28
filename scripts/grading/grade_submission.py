@@ -1571,6 +1571,23 @@ def run_grading(
     rubric_criteria: list[dict[str, Any]] = []
     if rubric_file and rubric_file.suffix.lower() == ".docx":
         rubric_criteria = extract_rubric_criteria_from_docx(rubric_file)
+    elif rubric_file and rubric_file.suffix.lower() == ".json":
+        try:
+            parsed = json.loads(rubric_text)
+            raw_criteria = parsed.get("criteria", [])
+            for idx, c in enumerate(raw_criteria, 1):
+                name = str(c.get("criterion_name", "")).strip()
+                pts = float(c.get("max_points", 0))
+                items = [str(i).strip() for i in c.get("checklist_items", []) if str(i).strip()]
+                if name and pts > 0 and items:
+                    rubric_criteria.append({
+                        "criterion_id": f"C{idx}",
+                        "criterion_name": name,
+                        "max_points": pts,
+                        "checklist_items": items,
+                    })
+        except Exception as exc:
+            print(f"WARNING: Could not parse JSON rubric: {exc}")
     if not rubric_criteria:
         rubric_criteria = extract_rubric_criteria(rubric_text)
     _rubric_from_file = bool(rubric_criteria)  # True if successfully parsed from actual rubric

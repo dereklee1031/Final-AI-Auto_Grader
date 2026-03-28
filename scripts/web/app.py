@@ -38,7 +38,7 @@ DEFAULT_LECTURE_CHUNKS = (
 )
 DEFAULT_ASSIGNMENT = PROJECT_ROOT / "assignments" / "assignment1_instructions.txt"
 DEFAULT_RUBRIC_DIR = Path(
-    os.getenv("AUTO_GRADER_RUBRIC_DIR", "/Users/sai/Downloads/Spring 2026 2/Assignment Rubrics")
+    os.getenv("AUTO_GRADER_RUBRIC_DIR", str(PROJECT_ROOT / "data" / "Spring 2026" / "Assignment Rubrics"))
 ).expanduser()
 
 # Shared Chroma DB for lecture content — built once, reused across all grading runs.
@@ -207,6 +207,7 @@ def _collect_supporting_files(run_root: Path) -> tuple[Path | None, Path | None,
     assignment_file = request.files.get("assignment")
     selected_rubric = request.form.get("selected_rubric", "")
     selected_assignment = request.form.get("selected_assignment", "")
+    generated_rubric_json = request.form.get("generated_rubric_json", "").strip()
 
     if rubric_file and rubric_file.filename and not _is_allowed_ext(rubric_file.filename, SUPPORT_ALLOWED_EXTS):
         return None, None, "Invalid rubric file type. Allowed: DOCX, PDF, TXT, MD."
@@ -217,7 +218,16 @@ def _collect_supporting_files(run_root: Path) -> tuple[Path | None, Path | None,
     rubric_path = None
     assignment_path = None
 
-    if rubric_file and rubric_file.filename:
+    if generated_rubric_json:
+        # Validate it's parseable JSON before saving
+        try:
+            json.loads(generated_rubric_json)
+        except Exception:
+            return None, None, "generated_rubric_json is not valid JSON."
+        support_dir.mkdir(parents=True, exist_ok=True)
+        rubric_path = support_dir / "generated_rubric.json"
+        rubric_path.write_text(generated_rubric_json, encoding="utf-8")
+    elif rubric_file and rubric_file.filename:
         support_dir.mkdir(parents=True, exist_ok=True)
         rubric_path = support_dir / _safe_upload_name(rubric_file.filename)
         rubric_file.save(str(rubric_path))
@@ -1209,6 +1219,107 @@ def api_status():
         "embedding_provider": _embedding_provider(),
         "lecture_chunks_path": str(DEFAULT_LECTURE_CHUNKS),
     })
+
+
+@app.route("/api/generate-rubric", methods=["POST"])
+def api_generate_rubric():
+    """
+    Generate or enhance a rubric from assignment instructions.
+
+    Form fields:
+        assignment_text  — raw assignment text (string)
+        assignment_file  — uploaded assignment file (.txt or .pdf), used if assignment_text empty
+        existing_rubric  — optional existing rubric text (triggers enhance mode)
+        instructions     — optional professor guidance for the LLM
+        model            — optional Anthropic model override
+    """
+    import sys as _sys
+    if str(SCRIPTS_DIR) not in _sys.path:
+        _sys.path.insert(0, str(SCRIPTS_DIR))
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify(success=False, error="ANTHROPIC_API_KEY is not set."), 400
+
+    # ── resolve assignment text ──
+    assignment_text = (request.form.get("assignment_text") or "").strip()
+
+    if not assignment_text and "assignment_file" in request.files:
+        f = request.files["assignment_file"]
+        if f and f.filename:
+            if not _is_allowed_ext(f.filename, {".txt", ".pdf", ".md"}):
+                return jsonify(success=False, error="Assignment file must be .txt, .pdf, or .md"), 400
+            raw = f.read()
+            if f.filename.lower().endswith(".pdf"):
+                try:
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(stream=raw, filetype="pdf")
+                    assignment_text = "\n".join(page.get_text() for page in doc).strip()
+                except Exception as exc:
+                    return jsonify(success=False, error=f"Failed to read PDF: {exc}"), 400
+            else:
+                assignment_text = raw.decode("utf-8", errors="replace").strip()
+
+    if not assignment_text:
+        return jsonify(success=False, error="Provide assignment_text or upload an assignment_file."), 400
+
+    # ── resolve existing rubric text (paste or file upload) ──
+    existing_rubric = (request.form.get("existing_rubric") or "").strip()
+    if not existing_rubric and "existing_rubric_file" in request.files:
+        rf = request.files["existing_rubric_file"]
+        if rf and rf.filename:
+            if not _is_allowed_ext(rf.filename, {".txt", ".md", ".pdf", ".docx", ".json"}):
+                return jsonify(success=False, error="Existing rubric file must be .txt, .md, .pdf, .docx, or .json"), 400
+            raw = rf.read()
+            ext = Path(rf.filename).suffix.lower()
+            if ext == ".pdf":
+                try:
+                    import fitz
+                    doc = fitz.open(stream=raw, filetype="pdf")
+                    existing_rubric = "\n".join(page.get_text() for page in doc).strip()
+                except Exception as exc:
+                    return jsonify(success=False, error=f"Failed to read rubric PDF: {exc}"), 400
+            elif ext == ".docx":
+                try:
+                    import io
+                    from docx import Document
+                    doc = Document(io.BytesIO(raw))
+                    existing_rubric = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                except Exception as exc:
+                    return jsonify(success=False, error=f"Failed to read rubric DOCX: {exc}"), 400
+            else:
+                existing_rubric = raw.decode("utf-8", errors="replace").strip()
+
+    instructions = (request.form.get("instructions") or "").strip()
+    model = (request.form.get("model") or "claude-sonnet-4-6").strip()
+
+    try:
+        from rubric_gen.generate_rubric import generate_rubric, enhance_rubric, rubric_to_dict
+    except ImportError as exc:
+        return jsonify(success=False, error=f"Could not import rubric_gen: {exc}"), 500
+
+    try:
+        if existing_rubric:
+            rubric = enhance_rubric(
+                assignment_text,
+                existing_rubric,
+                instructions=instructions,
+                model=model,
+                api_key=api_key,
+            )
+            mode = "enhance"
+        else:
+            rubric = generate_rubric(
+                assignment_text,
+                instructions=instructions,
+                model=model,
+                api_key=api_key,
+            )
+            mode = "generate"
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc)), 500
+
+    return jsonify(success=True, mode=mode, rubric=rubric_to_dict(rubric))
 
 
 if __name__ == "__main__":
