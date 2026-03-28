@@ -1211,6 +1211,81 @@ def api_status():
     })
 
 
+@app.route("/api/generate-rubric", methods=["POST"])
+def api_generate_rubric():
+    """
+    Generate or enhance a rubric from assignment instructions.
+
+    Form fields:
+        assignment_text  — raw assignment text (string)
+        assignment_file  — uploaded assignment file (.txt or .pdf), used if assignment_text empty
+        existing_rubric  — optional existing rubric text (triggers enhance mode)
+        instructions     — optional professor guidance for the LLM
+        model            — optional Anthropic model override
+    """
+    import sys as _sys
+    if str(SCRIPTS_DIR) not in _sys.path:
+        _sys.path.insert(0, str(SCRIPTS_DIR))
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify(success=False, error="ANTHROPIC_API_KEY is not set."), 400
+
+    # ── resolve assignment text ──
+    assignment_text = (request.form.get("assignment_text") or "").strip()
+
+    if not assignment_text and "assignment_file" in request.files:
+        f = request.files["assignment_file"]
+        if f and f.filename:
+            if not _is_allowed_ext(f.filename, {".txt", ".pdf", ".md"}):
+                return jsonify(success=False, error="Assignment file must be .txt, .pdf, or .md"), 400
+            raw = f.read()
+            if f.filename.lower().endswith(".pdf"):
+                try:
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(stream=raw, filetype="pdf")
+                    assignment_text = "\n".join(page.get_text() for page in doc).strip()
+                except Exception as exc:
+                    return jsonify(success=False, error=f"Failed to read PDF: {exc}"), 400
+            else:
+                assignment_text = raw.decode("utf-8", errors="replace").strip()
+
+    if not assignment_text:
+        return jsonify(success=False, error="Provide assignment_text or upload an assignment_file."), 400
+
+    existing_rubric = (request.form.get("existing_rubric") or "").strip()
+    instructions = (request.form.get("instructions") or "").strip()
+    model = (request.form.get("model") or "claude-sonnet-4-6").strip()
+
+    try:
+        from rubric_gen.generate_rubric import generate_rubric, enhance_rubric, rubric_to_dict
+    except ImportError as exc:
+        return jsonify(success=False, error=f"Could not import rubric_gen: {exc}"), 500
+
+    try:
+        if existing_rubric:
+            rubric = enhance_rubric(
+                assignment_text,
+                existing_rubric,
+                instructions=instructions,
+                model=model,
+                api_key=api_key,
+            )
+            mode = "enhance"
+        else:
+            rubric = generate_rubric(
+                assignment_text,
+                instructions=instructions,
+                model=model,
+                api_key=api_key,
+            )
+            mode = "generate"
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc)), 500
+
+    return jsonify(success=True, mode=mode, rubric=rubric_to_dict(rubric))
+
+
 if __name__ == "__main__":
     print("\n  AI Auto Grader — Web Interface")
     print("  http://localhost:5000\n")

@@ -646,6 +646,115 @@ button{font-family:var(--font);cursor:pointer}
     </div>
   </div>
 
+  <!-- ── Rubric Generator ── -->
+  <div class="card anim-in" id="rubricGenCard" style="margin-bottom:1.5rem">
+    <div class="card-title">
+      <div class="icon" style="background:rgba(124,58,237,.1);color:#7c3aed">&#x1F4CB;</div>
+      Rubric Generator
+    </div>
+    <p style="font-size:.82rem;color:var(--text2);margin-bottom:1.2rem;line-height:1.6">
+      Paste or upload assignment instructions to generate a grading rubric with criteria and checklist items.
+      Optionally paste an existing rubric to enhance it instead.
+    </p>
+
+    <div style="display:flex;flex-direction:column;gap:1rem">
+
+      <!-- Assignment instructions -->
+      <div>
+        <label style="font-size:.72rem;font-weight:700;color:var(--text3);letter-spacing:.04em;
+                       text-transform:uppercase;display:block;margin-bottom:.35rem">
+          Assignment Instructions <span style="color:var(--red)">*</span>
+        </label>
+        <textarea id="rubricAssignText" rows="5"
+          placeholder="Paste assignment instructions here, or upload a file below…"
+          style="font-family:var(--font);font-size:.83rem;padding:.65rem 1rem;border:1px solid var(--border);
+                 border-radius:var(--rs);outline:none;width:100%;resize:vertical;line-height:1.5;
+                 background:var(--surface2);color:var(--text);transition:border-color .2s"
+          onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='var(--border)'"></textarea>
+        <div style="margin-top:.5rem">
+          <label style="font-size:.75rem;color:var(--text3);cursor:pointer;display:inline-flex;align-items:center;gap:.4rem">
+            <input type="file" id="rubricAssignFile" accept=".txt,.pdf,.md"
+              onchange="rubricFileChosen(this,'rubricAssignFileLabel')" style="display:none">
+            <span style="padding:.3rem .8rem;border:1px solid var(--border);border-radius:8px;
+                         background:var(--surface2);font-size:.75rem;font-weight:600">&#x1F4CE; Upload file</span>
+            <span id="rubricAssignFileLabel" style="color:var(--text2)"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Existing rubric (optional) -->
+      <div>
+        <label style="font-size:.72rem;font-weight:700;color:var(--text3);letter-spacing:.04em;
+                       text-transform:uppercase;display:block;margin-bottom:.35rem">
+          Existing Rubric <span style="font-weight:400;color:var(--text3)">(optional — paste to enhance instead of generate)</span>
+        </label>
+        <textarea id="rubricExistingText" rows="3"
+          placeholder="Paste your current rubric here to have it enhanced rather than generated from scratch…"
+          style="font-family:var(--font);font-size:.83rem;padding:.65rem 1rem;border:1px solid var(--border);
+                 border-radius:var(--rs);outline:none;width:100%;resize:vertical;line-height:1.5;
+                 background:var(--surface2);color:var(--text);transition:border-color .2s"
+          onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='var(--border)'"></textarea>
+      </div>
+
+      <!-- Additional instructions -->
+      <div>
+        <label style="font-size:.72rem;font-weight:700;color:var(--text3);letter-spacing:.04em;
+                       text-transform:uppercase;display:block;margin-bottom:.35rem">
+          Additional Instructions <span style="font-weight:400;color:var(--text3)">(optional)</span>
+        </label>
+        <input type="text" id="rubricInstructions"
+          placeholder="e.g. Emphasize HL7 standards, add more weight to the diagram criterion…"
+          style="font-family:var(--font);font-size:.83rem;padding:.6rem 1rem;border:1px solid var(--border);
+                 border-radius:var(--rs);outline:none;width:100%;background:var(--surface2);
+                 color:var(--text);transition:border-color .2s"
+          onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='var(--border)'">
+      </div>
+
+      <!-- Button row -->
+      <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+        <button type="button" id="rubricGenBtn" onclick="generateRubric()"
+          style="font-family:var(--font);font-size:.85rem;font-weight:600;padding:.6rem 1.5rem;
+                 border-radius:var(--rs);border:none;
+                 background:linear-gradient(135deg,#7c3aed,#6d28d9);
+                 color:#fff;cursor:pointer;display:flex;align-items:center;gap:.5rem;
+                 box-shadow:0 4px 14px rgba(124,58,237,.3);transition:all .2s"
+          onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">
+          <span id="rubricGenBtnIcon">&#x2728;</span>
+          <span id="rubricGenBtnText">Generate Rubric</span>
+        </button>
+        <span id="rubricGenStatus" style="font-size:.8rem;color:var(--text2)"></span>
+      </div>
+
+      <!-- Output -->
+      <div id="rubricGenOutput" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+          <div style="font-size:.82rem;font-weight:700;color:var(--text2)">Generated Rubric</div>
+          <div style="display:flex;gap:.5rem">
+            <button onclick="rubricCopyJSON()"
+              style="font-family:var(--font);font-size:.75rem;font-weight:600;padding:.3rem .8rem;
+                     border-radius:8px;border:1px solid var(--border);background:var(--surface2);cursor:pointer">
+              &#x1F4CB; Copy JSON
+            </button>
+            <button onclick="rubricDownload()"
+              style="font-family:var(--font);font-size:.75rem;font-weight:600;padding:.3rem .8rem;
+                     border-radius:8px;border:1px solid #7c3aed;background:rgba(124,58,237,.07);
+                     color:#7c3aed;cursor:pointer">
+              &#x2B07; Download JSON
+            </button>
+          </div>
+        </div>
+        <div id="rubricCriteriaList" style="display:flex;flex-direction:column;gap:.75rem"></div>
+        <div style="margin-top:.75rem">
+          <div class="json-toggle" onclick="document.getElementById('rubricRawJson').classList.toggle('open')">
+            &#x25B6; Raw JSON
+          </div>
+          <div class="json-panel" id="rubricRawJson"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
   <!-- ── History ── -->
   <div class="card history-list anim-in" id="historyCard" style="display:none">
     <div class="card-title" style="justify-content:space-between">
@@ -1350,6 +1459,107 @@ async function loadHistory(){
     }
   } catch(e){ /* ignore */ }
 }
+/* ── RUBRIC GENERATOR ────────────────────────────────────── */
+let _lastRubricData = null;
+
+function rubricFileChosen(input, labelId) {
+  const label = document.getElementById(labelId);
+  if (input.files && input.files[0]) {
+    label.textContent = input.files[0].name;
+  }
+}
+
+async function generateRubric() {
+  const assignText = document.getElementById('rubricAssignText').value.trim();
+  const assignFile = document.getElementById('rubricAssignFile').files[0];
+  const existingText = document.getElementById('rubricExistingText').value.trim();
+  const instructions = document.getElementById('rubricInstructions').value.trim();
+
+  if (!assignText && !assignFile) {
+    document.getElementById('rubricGenStatus').innerHTML =
+      '<span style="color:var(--red)">Please provide assignment instructions.</span>';
+    return;
+  }
+
+  const btn = document.getElementById('rubricGenBtn');
+  const btnText = document.getElementById('rubricGenBtnText');
+  const btnIcon = document.getElementById('rubricGenBtnIcon');
+  const status = document.getElementById('rubricGenStatus');
+  const output = document.getElementById('rubricGenOutput');
+
+  btn.disabled = true;
+  btnIcon.innerHTML = '&#x23F3;';
+  btnText.textContent = 'Generating…';
+  status.textContent = '';
+  output.style.display = 'none';
+
+  const fd = new FormData();
+  if (assignText) fd.append('assignment_text', assignText);
+  if (assignFile) fd.append('assignment_file', assignFile);
+  if (existingText) fd.append('existing_rubric', existingText);
+  if (instructions) fd.append('instructions', instructions);
+
+  try {
+    const resp = await fetch('/api/generate-rubric', { method: 'POST', body: fd });
+    const data = await resp.json();
+
+    if (!data.success) {
+      status.innerHTML = `<span style="color:var(--red)">Error: ${esc(data.error)}</span>`;
+      return;
+    }
+
+    _lastRubricData = data.rubric;
+    const modeLabel = data.mode === 'enhance' ? '✏️ Enhanced' : '✨ Generated';
+    status.innerHTML = `<span style="color:var(--green)">${modeLabel} — ${data.rubric.criteria.length} criteria, ${data.rubric.total_points} pts total</span>`;
+
+    // Render criteria cards
+    const list = document.getElementById('rubricCriteriaList');
+    list.innerHTML = data.rubric.criteria.map((c, i) => `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--rs);padding:1rem 1.1rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+          <div style="font-weight:700;font-size:.9rem;color:var(--text)">${esc(c.criterion_name)}</div>
+          <div style="font-size:.8rem;font-weight:700;color:#7c3aed;background:rgba(124,58,237,.1);
+                      padding:.2rem .7rem;border-radius:20px">${c.max_points} pts</div>
+        </div>
+        <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.3rem">
+          ${c.checklist_items.map(item =>
+            `<li style="font-size:.8rem;color:var(--text2);display:flex;gap:.5rem;align-items:flex-start">
+              <span style="color:#7c3aed;flex-shrink:0;margin-top:.05rem">☐</span>
+              <span>${esc(item)}</span>
+            </li>`
+          ).join('')}
+        </ul>
+      </div>
+    `).join('');
+
+    // Raw JSON panel
+    document.getElementById('rubricRawJson').textContent = JSON.stringify(data.rubric, null, 2);
+    output.style.display = 'block';
+
+  } catch(e) {
+    status.innerHTML = `<span style="color:var(--red)">Request failed: ${esc(String(e))}</span>`;
+  } finally {
+    btn.disabled = false;
+    btnIcon.innerHTML = '&#x2728;';
+    btnText.textContent = 'Generate Rubric';
+  }
+}
+
+function rubricCopyJSON() {
+  if (!_lastRubricData) return;
+  navigator.clipboard.writeText(JSON.stringify(_lastRubricData, null, 2))
+    .then(() => { document.getElementById('rubricGenStatus').innerHTML = '<span style="color:var(--green)">Copied to clipboard!</span>'; });
+}
+
+function rubricDownload() {
+  if (!_lastRubricData) return;
+  const blob = new Blob([JSON.stringify(_lastRubricData, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'rubric.json';
+  a.click();
+}
+
 loadHistory();
 </script>
 </body>
