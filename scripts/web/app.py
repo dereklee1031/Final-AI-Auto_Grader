@@ -207,6 +207,7 @@ def _collect_supporting_files(run_root: Path) -> tuple[Path | None, Path | None,
     assignment_file = request.files.get("assignment")
     selected_rubric = request.form.get("selected_rubric", "")
     selected_assignment = request.form.get("selected_assignment", "")
+    generated_rubric_json = request.form.get("generated_rubric_json", "").strip()
 
     if rubric_file and rubric_file.filename and not _is_allowed_ext(rubric_file.filename, SUPPORT_ALLOWED_EXTS):
         return None, None, "Invalid rubric file type. Allowed: DOCX, PDF, TXT, MD."
@@ -217,7 +218,16 @@ def _collect_supporting_files(run_root: Path) -> tuple[Path | None, Path | None,
     rubric_path = None
     assignment_path = None
 
-    if rubric_file and rubric_file.filename:
+    if generated_rubric_json:
+        # Validate it's parseable JSON before saving
+        try:
+            json.loads(generated_rubric_json)
+        except Exception:
+            return None, None, "generated_rubric_json is not valid JSON."
+        support_dir.mkdir(parents=True, exist_ok=True)
+        rubric_path = support_dir / "generated_rubric.json"
+        rubric_path.write_text(generated_rubric_json, encoding="utf-8")
+    elif rubric_file and rubric_file.filename:
         support_dir.mkdir(parents=True, exist_ok=True)
         rubric_path = support_dir / _safe_upload_name(rubric_file.filename)
         rubric_file.save(str(rubric_path))
@@ -1253,7 +1263,33 @@ def api_generate_rubric():
     if not assignment_text:
         return jsonify(success=False, error="Provide assignment_text or upload an assignment_file."), 400
 
+    # ── resolve existing rubric text (paste or file upload) ──
     existing_rubric = (request.form.get("existing_rubric") or "").strip()
+    if not existing_rubric and "existing_rubric_file" in request.files:
+        rf = request.files["existing_rubric_file"]
+        if rf and rf.filename:
+            if not _is_allowed_ext(rf.filename, {".txt", ".md", ".pdf", ".docx", ".json"}):
+                return jsonify(success=False, error="Existing rubric file must be .txt, .md, .pdf, .docx, or .json"), 400
+            raw = rf.read()
+            ext = Path(rf.filename).suffix.lower()
+            if ext == ".pdf":
+                try:
+                    import fitz
+                    doc = fitz.open(stream=raw, filetype="pdf")
+                    existing_rubric = "\n".join(page.get_text() for page in doc).strip()
+                except Exception as exc:
+                    return jsonify(success=False, error=f"Failed to read rubric PDF: {exc}"), 400
+            elif ext == ".docx":
+                try:
+                    import io
+                    from docx import Document
+                    doc = Document(io.BytesIO(raw))
+                    existing_rubric = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                except Exception as exc:
+                    return jsonify(success=False, error=f"Failed to read rubric DOCX: {exc}"), 400
+            else:
+                existing_rubric = raw.decode("utf-8", errors="replace").strip()
+
     instructions = (request.form.get("instructions") or "").strip()
     model = (request.form.get("model") or "claude-sonnet-4-6").strip()
 

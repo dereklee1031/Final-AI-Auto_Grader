@@ -244,6 +244,7 @@ button{font-family:var(--font);cursor:pointer}
       Upload Files
     </div>
     <form id="gradeForm" enctype="multipart/form-data">
+      <input type="hidden" name="generated_rubric_json" id="generatedRubricJson" value="">
       <div class="upload-grid">
         <!-- Student PDF -->
         <div class="drop-zone" id="dz-student">
@@ -686,10 +687,20 @@ button{font-family:var(--font);cursor:pointer}
       <div>
         <label style="font-size:.72rem;font-weight:700;color:var(--text3);letter-spacing:.04em;
                        text-transform:uppercase;display:block;margin-bottom:.35rem">
-          Existing Rubric <span style="font-weight:400;color:var(--text3)">(optional — paste to enhance instead of generate)</span>
+          Existing Rubric <span style="font-weight:400;color:var(--text3)">(optional — upload or paste to enhance instead of generate)</span>
         </label>
+        <!-- Upload option -->
+        <div style="margin-bottom:.5rem">
+          <label style="font-size:.75rem;color:var(--text3);cursor:pointer;display:inline-flex;align-items:center;gap:.4rem">
+            <input type="file" id="rubricExistingFile" accept=".docx,.pdf,.txt,.md,.json"
+              onchange="rubricExistingFileChosen(this)" style="display:none">
+            <span style="padding:.3rem .8rem;border:1px solid var(--border);border-radius:8px;
+                         background:var(--surface2);font-size:.75rem;font-weight:600">&#x1F4CE; Upload rubric file</span>
+            <span id="rubricExistingFileLabel" style="color:var(--text2);font-size:.78rem"></span>
+          </label>
+        </div>
         <textarea id="rubricExistingText" rows="3"
-          placeholder="Paste your current rubric here to have it enhanced rather than generated from scratch…"
+          placeholder="…or paste your current rubric text here"
           style="font-family:var(--font);font-size:.83rem;padding:.65rem 1rem;border:1px solid var(--border);
                  border-radius:var(--rs);outline:none;width:100%;resize:vertical;line-height:1.5;
                  background:var(--surface2);color:var(--text);transition:border-color .2s"
@@ -729,7 +740,13 @@ button{font-family:var(--font);cursor:pointer}
       <div id="rubricGenOutput" style="display:none">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
           <div style="font-size:.82rem;font-weight:700;color:var(--text2)">Generated Rubric</div>
-          <div style="display:flex;gap:.5rem">
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button onclick="rubricUseForGrading()"
+              style="font-family:var(--font);font-size:.75rem;font-weight:600;padding:.3rem .9rem;
+                     border-radius:8px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);
+                     color:#fff;cursor:pointer;display:flex;align-items:center;gap:.35rem">
+              &#x2705; Use for Grading
+            </button>
             <button onclick="rubricCopyJSON()"
               style="font-family:var(--font);font-size:.75rem;font-weight:600;padding:.3rem .8rem;
                      border-radius:8px;border:1px solid var(--border);background:var(--surface2);cursor:pointer">
@@ -1469,6 +1486,26 @@ function rubricFileChosen(input, labelId) {
   }
 }
 
+function rubricExistingFileChosen(input) {
+  const label = document.getElementById('rubricExistingFileLabel');
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  label.textContent = file.name;
+  // For plain text / JSON / MD — read into textarea so professor can preview/edit
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (['txt', 'md', 'json'].includes(ext)) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      document.getElementById('rubricExistingText').value = e.target.result;
+    };
+    reader.readAsText(file);
+  } else {
+    // DOCX/PDF — will be sent as file, clear textarea to avoid sending both
+    document.getElementById('rubricExistingText').value = '';
+    label.textContent = file.name + ' (will be read server-side)';
+  }
+}
+
 async function generateRubric() {
   const assignText = document.getElementById('rubricAssignText').value.trim();
   const assignFile = document.getElementById('rubricAssignFile').files[0];
@@ -1493,10 +1530,12 @@ async function generateRubric() {
   status.textContent = '';
   output.style.display = 'none';
 
+  const existingFile = document.getElementById('rubricExistingFile').files[0];
   const fd = new FormData();
   if (assignText) fd.append('assignment_text', assignText);
   if (assignFile) fd.append('assignment_file', assignFile);
   if (existingText) fd.append('existing_rubric', existingText);
+  else if (existingFile) fd.append('existing_rubric_file', existingFile);
   if (instructions) fd.append('instructions', instructions);
 
   try {
@@ -1543,6 +1582,25 @@ async function generateRubric() {
     btnIcon.innerHTML = '&#x2728;';
     btnText.textContent = 'Generate Rubric';
   }
+}
+
+function rubricUseForGrading() {
+  if (!_lastRubricData) return;
+  document.getElementById('generatedRubricJson').value = JSON.stringify(_lastRubricData);
+  // Clear any uploaded rubric file so the generated one takes priority
+  const rubricInput = document.querySelector('input[name="rubric"]');
+  if (rubricInput) rubricInput.value = '';
+  document.getElementById('dz-rubric').classList.remove('has-file');
+  document.getElementById('dz-rubric-name').style.display = 'none';
+  // Visual confirmation — scroll up to upload section
+  document.getElementById('dz-rubric').style.borderColor = '#7c3aed';
+  document.getElementById('dz-rubric').style.background = 'rgba(124,58,237,.07)';
+  document.getElementById('dz-rubric-name').textContent = '✓ Using generated rubric';
+  document.getElementById('dz-rubric-name').style.display = 'block';
+  document.getElementById('dz-rubric-name').style.color = '#7c3aed';
+  document.getElementById('rubricGenStatus').innerHTML =
+    '<span style="color:#7c3aed;font-weight:600">✓ Rubric set for grading — scroll up and run the pipeline</span>';
+  document.querySelector('.card.anim-in').scrollIntoView({ behavior: 'smooth' });
 }
 
 function rubricCopyJSON() {
