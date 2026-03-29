@@ -311,6 +311,21 @@ IMPORTANT RULES:
 - Do NOT assign the same score to every criterion — differentiate based on evidence quality.
 - missing_items must name specific ☐ checklist items that were NO or missing.
 
+LECTURE CONTEXT — HOW TO USE IT:
+The === LECTURE CONTEXT === section contains retrieved course material relevant to this submission.
+- Use it to verify whether the student's claims, terminology, and concepts align with what was taught.
+- When a student's answer matches or references lecture content → mark checklist items YES and cite it.
+- When lecture context is rich and corroborates the student's work → confidence should be HIGH (0.85–1.0).
+- When lecture context is sparse or doesn't cover the student's topic → confidence should be MODERATE (0.65–0.80).
+- When no lecture context is available at all → confidence should be LOWER (0.50–0.65).
+
+CONFIDENCE CALIBRATION:
+- 0.90–1.00: You have a specific rubric, rich lecture context, and the student submission is clear and complete.
+- 0.75–0.89: You have a rubric and some lecture context, but some checklist items required interpretation.
+- 0.60–0.74: Limited lecture context OR rubric is vague OR submission text is sparse/unclear.
+- Below 0.60: No rubric provided, no lecture context, or submission is largely unreadable/missing.
+Do NOT default to low confidence when you have sufficient rubric + lecture context to make a clear judgment.
+
 OUTPUT COMPACTNESS (CRITICAL — prevent truncation):
 - justification: max 30 words
 - evidence_refs: max 1 short quote or image/table reference
@@ -723,8 +738,8 @@ def build_user_message(
         f"{json.dumps(rubric_criteria, ensure_ascii=True, indent=2)}\n\n"
         "=== RUBRIC ===\n"
         f"{rubric_text or '(No rubric provided)'}\n\n"
-        "=== LECTURE CONTEXT ===\n"
-        f"{lecture_context}\n\n"
+        "=== LECTURE CONTEXT (use to verify student claims and calibrate confidence) ===\n"
+        f"{lecture_context or '(No lecture context retrieved — grade from rubric and submission only, set confidence ≤ 0.65)'}\n\n"
         "=== STUDENT SUBMISSION ===\n"
         f"{student_excerpt}"
     )
