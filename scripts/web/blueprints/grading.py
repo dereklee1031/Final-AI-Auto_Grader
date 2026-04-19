@@ -1,5 +1,5 @@
 """
-blueprints/grading.py — /api/grade, /api/describe, /api/grade-existing, /api/grade-quiz-batch
+blueprints/grading.py — /api/grade, /api/grade-batch, /api/describe, /api/grade-existing, /api/grade-quiz-batch
 """
 from __future__ import annotations
 
@@ -207,6 +207,189 @@ def api_grade():
         pdf_filename = None
 
     return jsonify(success=True, grades=grades, run_id=run_id, steps=steps, pdf_report=pdf_filename)
+
+
+@grading_bp.route("/api/grade-batch", methods=["POST"])
+def api_grade_batch():
+    """Grade a folder of student submissions.
+
+    Extract → Describe → Index → Retrieve runs once for the whole batch.
+    Grading runs per-student so each gets an individual result.
+    """
+    student_files = request.files.getlist("student_files")
+    student_files = [f for f in student_files if f and f.filename]
+    if not student_files:
+        return jsonify(success=False, error="No student files uploaded."), 400
+
+    invalid = [f.filename for f in student_files if not _is_allowed_ext(f.filename, STUDENT_ALLOWED_EXTS)]
+    if invalid:
+        return jsonify(success=False,
+                       error=f"Invalid file type(s): {', '.join(invalid)}. Allowed: PDF, PPTX, XLSX."), 400
+
+    describe_provider = request.form.get("describe_provider", "openai")
+    describe_model    = request.form.get("describe_model") or PROVIDERS.get(describe_provider, {}).get("model", "gpt-4o-2024-11-20")
+    grade_provider    = request.form.get("grade_provider", "openai")
+    grade_model       = request.form.get("grade_model") or PROVIDERS.get(grade_provider, {}).get("model", "gpt-4o-2024-11-20")
+
+    for provider_name in {describe_provider, grade_provider}:
+        key_env_name = PROVIDER_API_KEY_ENV.get(provider_name)
+        if key_env_name and not os.getenv(key_env_name):
+            return jsonify(success=False, error=f"{key_env_name} is not set."), 400
+
+    run_id     = f"web_batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:4]}"
+    run_root   = OUTPUT_ROOT / run_id
+    upload_dir = run_root / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save all student files, track original → saved name mapping
+    saved: list[tuple[str, Path]] = []   # [(original_filename, saved_path), ...]
+    for f in student_files:
+        saved_name  = _safe_upload_name(f.filename)
+        saved_path  = upload_dir / saved_name
+        f.save(str(saved_path))
+        saved.append((f.filename, saved_path))
+
+    rubric_path, assignment_path, support_error = _collect_supporting_files(run_root)
+    if support_error:
+        return jsonify(success=False, error=support_error), 400
+
+    safe_describe_model = _safe(describe_model)
+    extract_dir   = run_root / "extract"
+    describe_dir  = run_root / f"describe_student_{describe_provider}_{safe_describe_model}"
+    retrieval_out = run_root / "retrieval.jsonl"
+
+    use_shared_chroma = _shared_chroma_ready()
+    chroma_path = _shared_chroma_dir() if use_shared_chroma else run_root / "chroma_db"
+
+    from web.config import DEFAULT_LECTURE_CHUNKS
+    pipeline_steps: list[dict] = []
+
+    # ── 1. Extract all files at once ──────────────────────────────────────────
+    code, out = _run(_cli() + [
+        "--mode", "extract",
+        "--data-dir", str(upload_dir),
+        "--output-root", str(OUTPUT_ROOT),
+        "--run-id", run_id,
+    ])
+    pipeline_steps.append({"step": "Extract All Submissions", "ok": code == 0, "log": out[-2000:]})
+    if code != 0:
+        return jsonify(success=False, error="Extraction failed.", steps=pipeline_steps, log=out[-1000:])
+
+    # ── 2. Describe all files at once ─────────────────────────────────────────
+    code, out = _run(_cli() + [
+        "--mode", "describe",
+        "--extract-dir", str(extract_dir),
+        "--describe-dir", str(describe_dir),
+        "--vision-provider", describe_provider,
+        "--vision-model", describe_model,
+        "--prompt-version", "verbose_v2",
+    ])
+    pipeline_steps.append({"step": "Analyze All Submissions", "ok": code == 0, "log": out[-2000:]})
+    if code != 0:
+        return jsonify(success=False, error="Content analysis failed.", steps=pipeline_steps, log=out[-1000:])
+
+    # ── 3. Index lectures (once) ──────────────────────────────────────────────
+    has_lectures = DEFAULT_LECTURE_CHUNKS.exists()
+    if has_lectures:
+        if not use_shared_chroma:
+            chroma_dir = _shared_chroma_dir()
+            chroma_dir.mkdir(parents=True, exist_ok=True)
+            code, out = _run(_cli() + [
+                "--mode", "index",
+                "--chunks-jsonl", str(DEFAULT_LECTURE_CHUNKS),
+                "--output-root", str(OUTPUT_ROOT),
+                "--run-id", run_id,
+                "--chroma-path", str(chroma_dir),
+                "--chroma-collection", SHARED_LECTURE_COLLECTION,
+            ], extra_env=_embedding_env())
+            pipeline_steps.append({"step": "Index Lectures", "ok": code == 0, "log": out[-2000:]})
+            if code != 0:
+                return jsonify(success=False, error="Lecture indexing failed.", steps=pipeline_steps)
+        else:
+            pipeline_steps.append({"step": "Index Lectures", "ok": True, "log": "Reusing shared lecture index."})
+
+        # ── 4. Retrieve (once for all students) ───────────────────────────────
+        code, out = _run(_cli() + [
+            "--mode", "retrieve",
+            "--chunks-jsonl", str(describe_dir / "chunks.jsonl"),
+            "--output-root", str(OUTPUT_ROOT),
+            "--run-id", run_id,
+            "--chroma-path", str(chroma_path),
+            "--chroma-collection", SHARED_LECTURE_COLLECTION,
+            "--retrieval-top-k", str(_adaptive_top_k()),
+            "--retrieval-out-jsonl", str(retrieval_out),
+        ], extra_env=_embedding_env())
+        pipeline_steps.append({"step": "Retrieve Context", "ok": code == 0, "log": out[-2000:]})
+        if code != 0:
+            return jsonify(success=False, error="Context retrieval failed.", steps=pipeline_steps)
+    else:
+        retrieval_out.parent.mkdir(parents=True, exist_ok=True)
+        retrieval_out.write_text("")
+        pipeline_steps.append({"step": "Lectures", "ok": True, "log": "No lecture chunks; grading without RAG context."})
+
+    # ── 5. Grade each student individually ────────────────────────────────────
+    student_results: list[dict] = []
+
+    for original_name, student_path in saved:
+        grade_args = _cli() + [
+            "--mode", "grade",
+            "--chunks-jsonl", str(describe_dir / "chunks.jsonl"),
+            "--retrieval-out-jsonl", str(retrieval_out),
+            "--output-root", str(OUTPUT_ROOT),
+            "--run-id", run_id,
+            "--grading-provider", grade_provider,
+            "--grading-model", grade_model,
+            "--student-path", student_path.name,
+        ]
+        if assignment_path and assignment_path.exists():
+            grade_args += ["--assignment-file", str(assignment_path)]
+        if rubric_path and rubric_path.exists():
+            grade_args += ["--rubric-file", str(rubric_path)]
+
+        code, out = _run(grade_args)
+
+        if code != 0 or not (run_root / "grading" / "grades.json").exists():
+            student_results.append({
+                "student_file": original_name,
+                "success": False,
+                "error": "Grading failed.",
+                "log": out[-500:],
+            })
+            continue
+
+        grades = json.loads((run_root / "grading" / "grades.json").read_text(encoding="utf-8"))
+        grades["_grading_context"] = {
+            "student_file":      original_name,
+            "rubric_file":       _original_name(rubric_path),
+            "assignment_file":   _original_name(assignment_path),
+            "describe_provider": describe_provider,
+            "describe_model":    describe_model,
+            "grade_provider":    grade_provider,
+            "grade_model":       grade_model,
+        }
+
+        try:
+            pdf_path     = _generate_grade_pdf(grades, f"{run_id}_{student_path.stem}")
+            pdf_filename = pdf_path.name if pdf_path else None
+        except Exception:
+            pdf_filename = None
+
+        student_results.append({
+            "student_file": original_name,
+            "success":      True,
+            "grades":       grades,
+            "pdf_report":   pdf_filename,
+        })
+
+    total   = len(student_results)
+    passed  = sum(1 for r in student_results if r["success"])
+    return jsonify(
+        success=True,
+        run_id=run_id,
+        pipeline_steps=pipeline_steps,
+        results=student_results,
+        summary={"total": total, "graded": passed, "failed": total - passed},
+    )
 
 
 @grading_bp.route("/api/describe", methods=["POST"])
