@@ -1208,7 +1208,7 @@ GRADING_PROVIDERS = {
 
 # Default models per provider
 DEFAULT_GRADING_MODELS = {
-    "openai": "gpt-4o-2024-11-20",
+    "openai": "gpt-4o-mini",
     "gemini": "gemini-2.5-flash",
     "anthropic": "claude-sonnet-4-6",
 }
@@ -1851,7 +1851,7 @@ def main() -> int:
     assignment_file = Path(args.assignment_file).expanduser().resolve() if args.assignment_file else None
 
     grading_provider = args.grading_provider
-    model = args.model or DEFAULT_GRADING_MODELS.get(grading_provider, "gpt-4o-2024-11-20")
+    model = args.model or DEFAULT_GRADING_MODELS.get(grading_provider, "gpt-4o-mini")
 
     run_grading(
         retrieval_jsonl=retrieval_jsonl,

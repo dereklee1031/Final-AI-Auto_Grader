@@ -27,6 +27,7 @@ LIBRARY_DIR             = PROJECT_ROOT / "data" / "library"
 LIBRARY_ASSIGNMENTS_DIR = LIBRARY_DIR / "assignments"
 LIBRARY_QUIZZES_DIR     = LIBRARY_DIR / "quizzes"
 LIBRARY_RUBRICS_DIR     = LIBRARY_DIR / "rubrics"
+LIBRARY_LECTURES_DIR    = LIBRARY_DIR / "lectures"
 
 # PDF reports
 REPORTS_DIR   = PROJECT_ROOT / "data" / "reports"
@@ -45,7 +46,7 @@ RUBRIC_ALLOWED_EXTS  = SUPPORT_ALLOWED_EXTS | {".json"}
 PROVIDERS = {
     "openai": {
         "label": "OpenAI GPT-4o",
-        "model": "gpt-4o-2024-11-20",
+        "model": "gpt-4o-mini",
         "color": "#10a37f",
         "icon":  "openai",
     },
