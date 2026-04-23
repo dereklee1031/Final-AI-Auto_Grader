@@ -43,6 +43,12 @@ RUBRIC_ALLOWED_EXTS  = SUPPORT_ALLOWED_EXTS | {".json"}
 
 # ── provider config ────────────────────────────────────────────────────────
 PROVIDERS = {
+    "anthropic": {
+        "label": "Anthropic Claude",
+        "model": "claude-sonnet-4-6",
+        "color": "#7c3aed",
+        "icon":  "anthropic",
+    },
     "openai": {
         "label": "OpenAI GPT-4o",
         "model": "gpt-4o-mini",
@@ -54,12 +60,6 @@ PROVIDERS = {
         "model": "gemini-2.5-flash",
         "color": "#4285f4",
         "icon":  "gemini",
-    },
-    "anthropic": {
-        "label": "Anthropic Claude",
-        "model": "claude-sonnet-4-6",
-        "color": "#7c3aed",
-        "icon":  "anthropic",
     },
 }
 
