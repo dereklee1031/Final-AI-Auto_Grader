@@ -422,7 +422,7 @@ button{font-family:var(--font);cursor:pointer}
           </div>
           <div class="config-group">
             <label>Describe Model</label>
-            <input type="text" name="describe_model" id="describeModelInput" value="{{ providers['openai'].model }}">
+            <input type="text" name="describe_model" id="describeModelInput" value="{{ providers.values()|first|attr('model') }}">
           </div>
           <div class="config-group">
             <label>Grade Provider</label>
@@ -434,7 +434,7 @@ button{font-family:var(--font);cursor:pointer}
           </div>
           <div class="config-group">
             <label>Grade Model</label>
-            <input type="text" name="grade_model" id="gradeModelInput" value="{{ providers['openai'].model }}">
+            <input type="text" name="grade_model" id="gradeModelInput" value="{{ providers.values()|first|attr('model') }}">
           </div>
         </div>
       </div>
@@ -1086,8 +1086,8 @@ button{font-family:var(--font);cursor:pointer}
     <div id="historyList"></div>
   </div>
 
-  <!-- ── Batch Quiz Grading (moved to grading tab) ── -->
-  <div class="card anim-in" id="batchQuizCard" style="display:none;margin-top:1.5rem;overflow:hidden;padding:0">
+  <!-- ── Batch Quiz Grading ── -->
+  <div class="card anim-in" id="batchQuizCard" style="margin-top:1.5rem;overflow:hidden;padding:0">
     <!-- Header -->
     <div style="background:linear-gradient(135deg,#0e7490,#0891b2,#06b6d4);padding:1.1rem 1.5rem;
                 display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
