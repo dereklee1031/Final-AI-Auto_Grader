@@ -17,9 +17,8 @@ OUTPUT_ROOT  = PROJECT_ROOT / "outputs" / "final_phase1"
 DEFAULT_LECTURE_CHUNKS = (
     OUTPUT_ROOT / "lecture_chunks_hybrid.jsonl"
 )
-DEFAULT_ASSIGNMENT = PROJECT_ROOT / "assignments" / "assignment1_instructions.txt"
 DEFAULT_RUBRIC_DIR = Path(
-    os.getenv("AUTO_GRADER_RUBRIC_DIR", "./data/Spring 2026/Assignment Rubrics")
+    os.getenv("AUTO_GRADER_RUBRIC_DIR", str(PROJECT_ROOT / "data" / "library" / "rubrics"))
 ).expanduser()
 
 # Library dirs — professor uploads here once; files persist across sessions

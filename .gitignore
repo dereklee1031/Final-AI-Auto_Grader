@@ -1,9 +1,49 @@
+# ── Python ────────────────────────────────────────────────────────────────────
 .venv/
+venv/
+env/
 __pycache__/
 *.pyc
-outputs/
-Spring 2026/
-.DS_Store
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Environment / Secrets ─────────────────────────────────────────────────────
 .env
-data/
+*.env.local
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── Pipeline outputs (regenerated; do not commit) ─────────────────────────────
+outputs/
 outputs*/
+
+# ── Student / course data (private; never commit) ─────────────────────────────
+Spring 2026/
+data/
+
+# ── Presentation & document files (large binaries) ────────────────────────────
+*.pptx
+*.ppt
+*.pdf
+AI Auto Grader.pdf
+
+# ── Node / JS build artefacts ─────────────────────────────────────────────────
+pptx_build/
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.log
+*.tmp
+PLAN.md
