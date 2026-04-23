@@ -295,28 +295,15 @@ Final-AI-Auto_Grader/
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    WEB INTERFACE (Flask)                      │
-│  Tab: Grade Submissions │ Tab: Lectures │ Tab: Setup/Rubric   │
-└───────────────┬─────────────────┬───────────────────────────┘
-                │                 │
-                ▼                 ▼
-   ┌─────────────────┐   ┌──────────────────────┐
-   │  GRADE PIPELINE │   │  LECTURE RAG PIPELINE │
-   │                 │   │                        │
-   │ 1. Extract      │   │ 1. Extract PDF         │
-   │ 2. Describe     │   │ 2. Vision Describe     │
-   │ 3. Retrieve ◄───┼───┤ 3. Embed → ChromaDB   │
-   │ 4. LLM Grade    │   └──────────────────────┘
-   │ 5. Policy Caps  │
-   │ 6. PDF Report   │
-   └─────────────────┘
+The full system design — including all 4 pipeline stages, API endpoints, and data flow — is shown below:
 
-Vision Providers:  OpenAI gpt-4o  │  Gemini 2.5 Flash  │  Claude Sonnet
-Grading LLMs:      gpt-4o-mini    │  gemini-2.5-flash   │  claude-sonnet-4-6
-Embeddings:        gemini-embed   │  text-embed-3-small  │  all-MiniLM (local)
-```
+![GradeAI Pro System Architecture](docs/GradeAI_Pro_Architecture.svg)
+
+> **Four pipeline stages:**
+> 1. **Lecture Knowledge Base** — HTML/PDF lecture ingestion → Vision AI diagram descriptions → Deduplication → Google Embeddings → ChromaDB (4,185 chunks)
+> 2. **Rubric Generation** — Assignment instructions → `claude-sonnet-4-6` → JSON rubric with criteria + checklist (Generate or Enhance mode)
+> 3. **Grading Pipeline** — Student PPTX/PDF/XLSX → Document Extractor + Vision AI → RAG Retrieval (top-8) → LLM Grader → YES/PARTIAL/NO → Score Normalizer → PDF Report + CSV
+> 4. **Quiz Batch Grading** — Excel upload → Column detection → Per-cell LLM → Scored Excel output
 
 ### Grading Logic
 
@@ -409,6 +396,62 @@ python scripts/cli/run_pipeline.py \
 ## For Future Developers
 
 > This section is for students who will continue this project in future semesters.
+
+### Handoff Notes — Spring 2026
+
+#### What Was Built
+
+This project was developed during **Spring 2026** at Boston University MET (CS/CDS). The following components are fully implemented and working:
+
+| Component | Status | Notes |
+|---|---|---|
+| HTML + PDF lecture ingestion | ✅ Complete | BeautifulSoup + PyMuPDF, 142 HTML + 6 PDF modules |
+| Vision AI diagram descriptions | ✅ Complete | OpenAI gpt-4o, Gemini, Claude with auto-tiling |
+| ChromaDB RAG index | ✅ Complete | 4,185 chunks, L2≤1.5, Google/OpenAI/local embeddings |
+| Rubric generation (AI) | ✅ Complete | claude-sonnet-4-6, Generate + Enhance modes |
+| Student grading (PDF/PPTX/XLSX) | ✅ Complete | All 3 LLM providers, policy caps, grade bands |
+| Quiz batch grading (Excel) | ✅ Complete | Fuzzy column detection, per-cell LLM, scored output |
+| PDF grade reports | ✅ Complete | Per-criterion breakdown, evidence, policy cap log |
+| CSV export | ✅ Complete | All grades in one spreadsheet |
+| Flask web UI | ✅ Complete | 3-tab interface, batch grading, library management |
+
+#### What Was NOT Built (Future Work)
+
+- **No automated test suite** — unit tests for grading logic are the highest-priority gap
+- **No authentication** — the web UI has no login; not suitable for public deployment without adding auth
+- **No async job queue** — batch grading blocks the Flask worker; large batches (>10 students) may time out; consider Celery + Redis
+- **No hosted deployment** — currently runs locally only; needs Gunicorn + Nginx or a cloud deployment for shared use
+- **No plagiarism detection** — no cross-student comparison or similarity scoring
+- **No grade appeal workflow** — grades are final; no UI for students to dispute
+
+#### How to Start Efficiently (Next Team)
+
+1. **Read this README end to end** — the full workflow is documented in [Step-by-Step Workflow](#step-by-step-workflow)
+2. **Run the app locally first** — follow [Installation](#installation) and grade one sample student to see the full pipeline
+3. **Read these two files** (the core of the system):
+   - `scripts/grading/grade_submission.py` — rubric parsing, scoring, policy caps
+   - `scripts/web/blueprints/grading.py` — how the UI triggers grading
+4. **Check the dataset documentation** — see `dataset-documentation/DATASETDOC-sp26.md` for data provenance and structure
+5. **Your first recommended tasks** (in order):
+   - Add pytest tests for `grade_submission.py` (scoring math is critical to validate)
+   - Add async job processing so batch grading doesn't block
+   - Add a simple login page (Flask-Login) before any shared deployment
+
+#### Where Key Data Lives
+
+| Data | Location | Gitignored? |
+|---|---|---|
+| Lecture PDFs/HTMLs | `data/library/lectures/` | Yes |
+| Student submissions | `data/library/assignments/` | Yes |
+| Rubric files | `data/library/rubrics/` | Yes |
+| ChromaDB vector index | `outputs/final_phase1/chroma_db/` | Yes |
+| Grade PDF reports | `data/reports/` | Yes |
+| Lecture chunks (JSONL) | `outputs/final_phase1/lecture_chunks_hybrid.jsonl` | Yes |
+| API keys | `.env` | Yes — never commit |
+
+All gitignored data directories are **auto-created** on first app startup.
+
+---
 
 ### How to Add a New Grading Provider
 
