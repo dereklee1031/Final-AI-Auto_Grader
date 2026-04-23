@@ -1282,7 +1282,7 @@ button{font-family:var(--font);cursor:pointer}
                 style="width:100%;padding:.42rem .6rem;border:1px solid var(--border);border-radius:7px;
                        font-size:.8rem;background:var(--surface);color:var(--text);font-family:inherit">
                 {% for key, p in providers.items() %}
-                <option value="{{ key }}">{{ p.label }}</option>
+                <option value="{{ key }}" {% if key == 'openai' %}selected{% endif %}>{{ p.label }}</option>
                 {% endfor %}
               </select>
             </div>
