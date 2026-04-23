@@ -416,25 +416,25 @@ button{font-family:var(--font);cursor:pointer}
             <label>Describe Provider</label>
             <select name="describe_provider" id="describeProviderSelect" onchange="updateModel('describeProviderSelect','describeModelInput')">
               {% for key, p in providers.items() %}
-              <option value="{{ key }}">{{ p.label }}</option>
+              <option value="{{ key }}" {% if key == 'openai' %}selected{% endif %}>{{ p.label }}</option>
               {% endfor %}
             </select>
           </div>
           <div class="config-group">
             <label>Describe Model</label>
-            <input type="text" name="describe_model" id="describeModelInput" value="{{ providers.values()|first|attr('model') }}">
+            <input type="text" name="describe_model" id="describeModelInput" value="{{ providers['openai']['model'] }}">
           </div>
           <div class="config-group">
             <label>Grade Provider</label>
             <select name="grade_provider" id="gradeProviderSelect" onchange="updateModel('gradeProviderSelect','gradeModelInput')">
               {% for key, p in providers.items() %}
-              <option value="{{ key }}">{{ p.label }}</option>
+              <option value="{{ key }}" {% if key == 'anthropic' %}selected{% endif %}>{{ p.label }}</option>
               {% endfor %}
             </select>
           </div>
           <div class="config-group">
             <label>Grade Model</label>
-            <input type="text" name="grade_model" id="gradeModelInput" value="{{ providers.values()|first|attr('model') }}">
+            <input type="text" name="grade_model" id="gradeModelInput" value="{{ providers['anthropic']['model'] }}">
           </div>
         </div>
       </div>
