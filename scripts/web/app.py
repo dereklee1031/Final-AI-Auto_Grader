@@ -24,8 +24,10 @@ from web.config import (
     DEFAULT_LECTURE_CHUNKS,
     DEFAULT_RUBRIC_DIR,
     LIBRARY_ASSIGNMENTS_DIR,
+    LIBRARY_LECTURES_DIR,
     LIBRARY_QUIZZES_DIR,
     LIBRARY_RUBRICS_DIR,
+    OUTPUT_ROOT,
     PROJECT_ROOT,
     PROVIDERS,
     RUBRIC_ALLOWED_EXTS,
@@ -43,6 +45,18 @@ from web.blueprints.reports  import reports_bp
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB
+
+    # Ensure all required data directories exist on first run
+    for directory in [
+        LIBRARY_ASSIGNMENTS_DIR,
+        LIBRARY_QUIZZES_DIR,
+        LIBRARY_RUBRICS_DIR,
+        LIBRARY_LECTURES_DIR,
+        PROJECT_ROOT / "data" / "reports",
+        PROJECT_ROOT / "assignments",
+        OUTPUT_ROOT,
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
 
     app.register_blueprint(grading_bp)
     app.register_blueprint(lecture_bp)
