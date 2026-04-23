@@ -18,11 +18,36 @@ from web.config import (
 
 
 def _embedding_provider() -> str:
+    """
+    Resolve which embedding provider to use.
+
+    Priority:
+      1. CHROMA_EMBEDDING_PROVIDER env var (if the required API key is also present)
+      2. Auto-detect from available API keys
+      3. Fall back to local sentence-transformers (free, no key needed)
+    """
     explicit = os.getenv("CHROMA_EMBEDDING_PROVIDER", "").strip().lower()
-    if explicit in {"openai", "google", "default"}:
-        return explicit
+
+    # Validate that the requested provider actually has a key; fall back if not.
+    if explicit == "google":
+        if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+            return "google"
+        # Configured as google but no key → fall back silently
+        explicit = ""
+    if explicit == "openai":
+        if os.getenv("OPENAI_API_KEY"):
+            return "openai"
+        explicit = ""
+    if explicit == "default":
+        return "default"
+
+    # Auto-detect from whichever key is present
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
         return "google"
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+
+    # No API keys at all → local embeddings, always works
     return "default"
 
 
