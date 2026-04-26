@@ -327,6 +327,8 @@ There is **no** per-run fine-tuning. **Few-shot calibration** is implemented as 
 
 Optional rubric and assignment text are merged into the same request so the model knows what “done” means for that assignment.
 
+**Additional few-shot file (lowers grader–human error):** You can append instructor-written exemplars via `--few-shot-file path/to/exemplars.txt` on `grade_submission` / `run_pipeline --mode grade`, or set `AUTO_GRADER_FEW_SHOT_FILE` in `.env` (used by the web app’s grading subprocess). Content is added to the **system** prompt under `=== FEW-SHOT EXEMPLARS (calibration) ===` (capped at 16k chars). `grades.json` records `few_shot_file` when loaded.
+
 ### Grading Logic
 
 The grading engine (`scripts/grading/grade_submission.py`) works as follows:
@@ -399,6 +401,7 @@ python scripts/cli/run_pipeline.py \
   --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval.jsonl" \
   --student-path "Student_1.pdf" \
   --rubric-file "data/library/rubrics/my_rubric.docx" \
+  --few-shot-file "path/to/grading_exemplars.txt" \
   --grading-provider openai \
   --grading-model "gpt-4o-mini"
 ```
@@ -412,6 +415,7 @@ python scripts/cli/run_pipeline.py \
 | `ANTHROPIC_API_KEY` | — | Anthropic Claude access |
 | `CHROMA_EMBEDDING_PROVIDER` | *(local)* | `google`, `openai`, or empty |
 | `AUTO_GRADER_RUBRIC_DIR` | `data/library/rubrics` | Default rubric folder |
+| `AUTO_GRADER_FEW_SHOT_FILE` | — | Optional path to few-shot exemplar text for the main grader |
 | `FLASK_HOST` | `127.0.0.1` | Web server host |
 | `FLASK_PORT` | `5000` | Web server port |
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |

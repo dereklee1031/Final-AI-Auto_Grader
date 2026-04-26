@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -345,6 +346,53 @@ Return ONLY valid JSON:
   "confidence": <0-1 float>
 }
 """
+
+# Optional file (or env) appends in-context exemplars to reduce human–model score error (e.g. lower MSE vs human).
+FEW_SHOT_ENV = "AUTO_GRADER_FEW_SHOT_FILE"
+_FEW_SHOT_MAX_CHARS = 16_000
+
+
+def _resolve_few_shot_file(explicit: Path | None) -> Path | None:
+    """Prefer explicit --few-shot-file; else AUTO_GRADER_FEW_SHOT_FILE in .env."""
+    if explicit is not None:
+        p = explicit.expanduser().resolve()
+        if p.is_file():
+            return p
+        print(f"WARNING: --few-shot-file not found or not a file: {p}", file=sys.stderr)
+    raw = os.getenv(FEW_SHOT_ENV, "").strip()
+    if not raw:
+        return None
+    p = Path(raw).expanduser().resolve()
+    if p.is_file():
+        return p
+    print(f"WARNING: {FEW_SHOT_ENV} not found or not a file: {p}", file=sys.stderr)
+    return None
+
+
+def _load_few_shot_exemplars(path: Path) -> str:
+    t = read_text_file(path)
+    if not t:
+        return ""
+    if len(t) > _FEW_SHOT_MAX_CHARS:
+        print(
+            f"WARNING: Few-shot file truncated from {len(t):,} to {_FEW_SHOT_MAX_CHARS:,} chars.",
+            file=sys.stderr,
+        )
+        return t[:_FEW_SHOT_MAX_CHARS]
+    return t
+
+
+def build_system_prompt_with_few_shot(base: str, few_shot_exemplars: str) -> str:
+    fs = (few_shot_exemplars or "").strip()
+    if not fs:
+        return base
+    return (
+        base
+        + "\n\n=== FEW-SHOT EXEMPLARS (calibration) ===\n"
+        "The following examples illustrate how to apply the rubric and YES/PARTIAL/NO judgments. "
+        "Match this scoring spirit; the rubric and student submission in the user message remain authoritative.\n\n"
+        + fs
+    )
 
 
 def detect_expected_sections(text: str) -> list[str]:
@@ -1515,6 +1563,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Text file with the actual assignment instructions/questions.",
     )
+    parser.add_argument(
+        "--few-shot-file",
+        default=None,
+        help=f"Optional .txt/.md with few-shot exemplars appended to the system prompt "
+        f"(reduces grader vs human error). Or set env {FEW_SHOT_ENV}.",
+    )
     return parser.parse_args()
 
 
@@ -1530,6 +1584,7 @@ def run_grading(
     max_student_chars: int,
     rubric_file: Path | None = None,
     assignment_file: Path | None = None,
+    few_shot_file: Path | None = None,
 ) -> Path:
     if grading_provider not in GRADING_PROVIDERS:
         raise RuntimeError(f"Unknown grading provider: {grading_provider}. Use: {list(GRADING_PROVIDERS.keys())}")
@@ -1612,6 +1667,12 @@ def run_grading(
         if expected_sections:
             print(f"Expected sections (from student text): {expected_sections}")
 
+    few_shot_path = _resolve_few_shot_file(few_shot_file)
+    few_shot_text = _load_few_shot_exemplars(few_shot_path) if few_shot_path else ""
+    system_prompt = build_system_prompt_with_few_shot(SYSTEM_PROMPT, few_shot_text)
+    if few_shot_path:
+        print(f"Few-shot exemplars loaded: {len(few_shot_text):,} chars from {few_shot_path}")
+
     user_msg = build_user_message(
         student_text=student_text,
         lecture_context=lecture_context,
@@ -1627,7 +1688,7 @@ def run_grading(
     response = call_fn(
         model=model,
         api_key=api_key,
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         user=user_msg,
     )
 
@@ -1653,6 +1714,7 @@ def run_grading(
         "rubric_criteria": rubric_criteria,
         "rubric_used_generic_defaults": not _rubric_from_file,
         "assignment_file": str(assignment_file) if assignment_file else None,
+        "few_shot_file": str(few_shot_path) if few_shot_path else None,
         "expected_sections": expected_sections,
         "token_usage": usage,
         **normalized,
@@ -1711,6 +1773,7 @@ def main() -> int:
     out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else retrieval_jsonl.parent
     rubric_file = Path(args.rubric_file).expanduser().resolve() if args.rubric_file else None
     assignment_file = Path(args.assignment_file).expanduser().resolve() if args.assignment_file else None
+    few_shot_file = Path(args.few_shot_file).expanduser().resolve() if args.few_shot_file else None
 
     grading_provider = args.grading_provider
     model = args.model or DEFAULT_GRADING_MODELS.get(grading_provider, "gpt-4o-2024-11-20")
@@ -1726,6 +1789,7 @@ def main() -> int:
         max_student_chars=int(args.max_student_chars),
         rubric_file=rubric_file,
         assignment_file=assignment_file,
+        few_shot_file=few_shot_file,
     )
     return 0
 
