@@ -22,6 +22,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--data-dir", help="Input root directory for extract/full")
+    parser.add_argument("--source-type", default=None, choices=["lecture", "student"],
+                        help="Force source_type for all chunks (overrides path inference)")
     parser.add_argument("--output-root", default="outputs/final_phase1", help="Root output directory")
     parser.add_argument("--run-id", default=None, help="Run id; default timestamp")
 
@@ -160,6 +162,7 @@ def main() -> int:
             chroma_batch_size=args.chroma_batch_size,
             vision_input_cost_per_1m=args.vision_input_cost_per_1m,
             vision_output_cost_per_1m=args.vision_output_cost_per_1m,
+            source_type_override=args.source_type,
         )
         print(f"Describe complete: {describe_dir / 'summary.json'}")
         print(f"Generated chunks: {summary.get('chunk_count')}")
@@ -188,6 +191,7 @@ def main() -> int:
             chroma_batch_size=args.chroma_batch_size,
             vision_input_cost_per_1m=args.vision_input_cost_per_1m,
             vision_output_cost_per_1m=args.vision_output_cost_per_1m,
+            source_type_override=args.source_type,
         )
         print(f"Full run complete under: {run_root}")
         print(f"Extracted files: {manifest.get('processed_file_count')} / {manifest.get('file_count')}")

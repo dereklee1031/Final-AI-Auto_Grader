@@ -1,6 +1,6 @@
 # GradeAI Pro — AI-Powered Auto Grader
 
-> **Boston University MET CS / CDS · Spring 2026** 
+> **Boston University MET CS / CDS · Spring 2026**  
 > Automatically grade student PDF/PPTX/Excel submissions using Vision AI + RAG + LLM — with a simple web interface.
 
 ---
@@ -13,11 +13,11 @@
 4. [Configuration — API Keys](#configuration--api-keys)
 5. [Running the Web App](#running-the-web-app)
 6. [Step-by-Step Workflow](#step-by-step-workflow)
- - [Step 1 — Upload & Describe Lectures](#step-1--upload--describe-lectures)
- - [Step 2 — Push Lectures to RAG](#step-2--push-lectures-to-rag)
- - [Step 3 — Upload Assignment & Rubric](#step-3--upload-assignment--rubric)
- - [Step 4 — Grade Student Submissions](#step-4--grade-student-submissions)
- - [Step 5 — View Reports & Export](#step-5--view-reports--export)
+   - [Step 1 — Upload & Describe Lectures](#step-1--upload--describe-lectures)
+   - [Step 2 — Push Lectures to RAG](#step-2--push-lectures-to-rag)
+   - [Step 3 — Upload Assignment & Rubric](#step-3--upload-assignment--rubric)
+   - [Step 4 — Grade Student Submissions](#step-4--grade-student-submissions)
+   - [Step 5 — View Reports & Export](#step-5--view-reports--export)
 7. [Project Structure](#project-structure)
 8. [Architecture Overview](#architecture-overview)
 9. [CLI Reference (Advanced)](#cli-reference-advanced)
@@ -65,7 +65,7 @@ sudo apt-get install tesseract-ocr
 ```
 
 **Windows:**
-Download the installer from https://github.com/UB-Mannheim/tesseract/wiki 
+Download the installer from https://github.com/UB-Mannheim/tesseract/wiki  
 Then add Tesseract to your PATH.
 
 ---
@@ -158,8 +158,8 @@ This is the exact workflow for a professor using the system each semester.
 1. Go to the **Manage Lectures** tab
 2. Click **Upload Lecture PDF** and upload your lecture PDFs (one at a time)
 3. After uploading, click **Describe Lecture**
- - Select a Vision AI provider (OpenAI or Gemini recommended)
- - This reads every image and diagram in the PDF — takes 1–3 minutes per lecture
+   - Select a Vision AI provider (OpenAI or Gemini recommended)
+   - This reads every image and diagram in the PDF — takes 1–3 minutes per lecture
 4. Repeat for all lecture modules
 
 **What this does:** The system extracts text, tables, and images from each PDF, then uses Vision AI to describe every diagram and figure. This creates rich, searchable content.
@@ -172,8 +172,8 @@ This is the exact workflow for a professor using the system each semester.
 
 1. Still on the **Manage Lectures** tab
 2. Click **Index All Lectures into RAG**
- - This embeds all described lecture content into ChromaDB
- - Takes 1–5 minutes depending on how many lectures you have
+   - This embeds all described lecture content into ChromaDB
+   - Takes 1–5 minutes depending on how many lectures you have
 3. You'll see a confirmation: *"Shared Chroma index is ready"*
 
 **What this does:** All lecture chunks are embedded into a vector database. When grading, the system automatically retrieves the most relevant lecture sections for each student's work.
@@ -186,10 +186,10 @@ This is the exact workflow for a professor using the system each semester.
 
 1. Go to the **Rubric & Setup** tab
 2. Under **Assignments**, click **Upload** and add your assignment PDF
- - Use the PDF version of the assignment (not a plain text file) for best results
+   - Use the PDF version of the assignment (not a plain text file) for best results
 3. Under **Rubrics**, click **Upload** and add your rubric
- - Supported formats: `.docx`, `.pdf`, `.txt`, `.json`
- - **Tip:** A DOCX rubric with a table (criterion | points | checklist items) gives the best grading results
+   - Supported formats: `.docx`, `.pdf`, `.txt`, `.json`
+   - **Tip:** A DOCX rubric with a table (criterion | points | checklist items) gives the best grading results
 4. Alternatively, click **Generate Rubric from Assignment** to have AI create a rubric from your assignment text
 
 ---
@@ -198,12 +198,12 @@ This is the exact workflow for a professor using the system each semester.
 
 1. Go to the **Grade Submissions** tab
 2. Under **Files**, click **Add Files** and select student submissions
- - Supported: `.pdf`, `.pptx`, `.xlsx`
- - You can select multiple students at once for batch grading
+   - Supported: `.pdf`, `.pptx`, `.xlsx`
+   - You can select multiple students at once for batch grading
 3. Choose your settings:
- - **Grading Provider:** OpenAI (fast/cheap), Gemini, or Anthropic (most thorough)
- - **Assignment:** select the assignment you uploaded in Step 3
- - **Rubric:** select the rubric you uploaded in Step 3
+   - **Grading Provider:** OpenAI (fast/cheap), Gemini, or Anthropic (most thorough)
+   - **Assignment:** select the assignment you uploaded in Step 3
+   - **Rubric:** select the rubric you uploaded in Step 3
 4. Click **Grade**
 5. Watch the progress log — grading takes about 1–3 minutes per student
 
@@ -214,6 +214,78 @@ Upload → Extract text/images → Vision AI describes diagrams
     → LLM grades each rubric criterion
       → Apply policy caps → Generate PDF report
 ```
+Final-AI-Auto_Grader/
+│
+├── scripts/                        # All Python source code
+│   ├── cli/
+│   │   └── run_pipeline.py         # Main CLI — extract/describe/index/grade
+│   ├── core/
+│   │   ├── config.py               # Central config + env loading
+│   │   ├── chunking.py             # Text chunking with overlap
+│   │   └── pipeline.py             # Pipeline orchestration
+│   ├── extractors/                 # PDF, PPTX, Excel, HTML extractors
+│   ├── vision/                     # Vision AI wrappers + image tiling
+│   ├── image_utils/                # OCR, image filtering, captions
+│   ├── grading/
+│   │   └── grade_submission.py     # Core grading engine (rubric → score)
+│   ├── rubric_gen/                 # AI-powered rubric generation
+│   ├── retrieval/
+│   │   └── chroma_rag.py           # ChromaDB lecture index + retrieval
+│   ├── storage/                    # ChromaDB persistence + JSONL writers
+│   └── web/                        # Flask web application
+│       ├── app.py                  # App factory + route registration
+│       ├── config.py               # Web config + paths
+│       ├── blueprints/             # Route handlers
+│       │   ├── grading.py          # /api/grade, /api/grade-batch
+│       │   ├── lecture.py          # /api/library/lectures, /api/index-lectures
+│       │   ├── library.py          # /api/library/assignments|rubrics|quizzes
+│       │   ├── rubric.py           # /api/generate-rubric
+│       │   └── reports.py          # /api/history, /api/export-csv
+│       ├── templates/              # HTML templates (Jinja2)
+│       └── utils/
+│           ├── pipeline.py         # Web → CLI subprocess bridge
+│           ├── files.py            # File validation + safe paths
+│           ├── pdf_generator.py    # Grade report PDF builder
+│           └── web_scraper.py      # Web page text extraction
+│
+├── data/                           # Persistent user data (gitignored)
+│   ├── library/
+│   │   ├── assignments/            # Uploaded assignment files
+│   │   ├── lectures/               # Uploaded lecture PDFs
+│   │   ├── rubrics/                # Uploaded rubric files
+│   │   └── quizzes/                # Uploaded quiz files
+│   └── reports/                    # Generated PDF grade reports
+│
+├── outputs/                        # Pipeline run outputs (gitignored)
+│   └── final_phase1/
+│       ├── lecture_chunks_hybrid.jsonl   # Combined lecture chunks
+│       └── <run_id>/                     # Per-run results
+│           ├── extract/                  # Raw extraction
+│           ├── describe_<provider>/      # Vision descriptions + chunks.jsonl
+│           ├── retrieval.jsonl           # Lecture context matches
+│           └── grading/grades.json       # Final scores
+│
+├── .env.example                    # API key template (safe to commit)
+├── .env                            # Your actual keys (NEVER commit this)
+├── requirements.txt                # Python dependencies
+└── README.md                       # This file
+```
+
+---
+
+## Architecture Overview
+
+The full system design — including all 4 pipeline stages, API endpoints, and data flow — is shown below:
+
+![GradeAI Pro System Architecture](docs/GradeAI_Pro_Architecture.svg)
+
+> **Four pipeline stages:**
+> 1. **Lecture Knowledge Base** — HTML/PDF lecture ingestion → Vision AI diagram descriptions → Deduplication → Google Embeddings → ChromaDB (4,185 chunks)
+> 2. **Rubric Generation** — Assignment instructions → `claude-sonnet-4-6` → JSON rubric with criteria + checklist (Generate or Enhance mode)
+> 3. **Grading Pipeline** — Student PPTX/PDF/XLSX → Document Extractor + Vision AI → RAG Retrieval (top-8) → **LLM grader (few-shot calibration in `SYSTEM_PROMPT`)** → YES/PARTIAL/NO → grade-band mapping → policy caps where needed → PDF Report + CSV
+> 4. **Quiz Batch Grading** — Excel upload → Column detection → Per-cell LLM → Scored Excel output. **Quiz-specific few-shot calibration** (see below) is stored as editable text and used to align short-answer quiz items with human scores.
+
+### Few-shot calibration — quizzes (Quiz 1, Question 13)
 
 ---
 
@@ -302,32 +374,8 @@ The full system design — including all 4 pipeline stages, API endpoints, and d
 > **Four pipeline stages:**
 > 1. **Lecture Knowledge Base** — HTML/PDF lecture ingestion → Vision AI diagram descriptions → Deduplication → Google Embeddings → ChromaDB (4,185 chunks)
 > 2. **Rubric Generation** — Assignment instructions → `claude-sonnet-4-6` → JSON rubric with criteria + checklist (Generate or Enhance mode)
-> 3. **Grading Pipeline** — Student PPTX/PDF/XLSX → Document Extractor + Vision AI → RAG Retrieval (top-8) → **LLM grader (few-shot calibration in `SYSTEM_PROMPT`)** → YES/PARTIAL/NO → grade-band mapping → policy caps where needed → PDF Report + CSV
-> 4. **Quiz Batch Grading** — Excel upload → Column detection → Per-cell LLM → Scored Excel output. **Quiz-specific few-shot calibration** (see below) is stored as editable text and used to align short-answer quiz items with human scores.
-
-### Few-shot calibration — quizzes (Quiz 1, Question 13)
-
-Some quiz items are graded with a **dedicated** system prompt that includes the official sub-rubric, error-correction rules, and **ANCHOR EXAMPLES** (graded exemplar answers) so the model does not over-rely on keyword matching. For CS 581 Quiz 1, Question 13 (BPR for EHR), the prompt is versioned in:
-
-- `scripts/grading/calibrations/quiz1_q13_bpr_system_prompt.txt`
-- `scripts/grading/regrade_quiz1_with_new_prompt.py` — batch re-grading / calibration runs against an anonymized **AI vs human** spreadsheet. Pass the path to your `.xlsx` and optional column indices; no machine-specific paths are required.
-
-```bash
-python scripts/grading/regrade_quiz1_with_new_prompt.py path/to/CS581_Quiz1_AI_vs_Human_Anonymized.xlsx
-```
-
-### Few-shot calibration (this repo, `scripts/grading/grade_submission.py`)
-
-There is **no** per-run fine-tuning. **Few-shot calibration** is implemented as **fixed, in-prompt** instructions on every grading call:
-
-- **Blind grading** — The grader is told to ignore path/folder cues (for example, “good example” or “bad example”) and to score only the submission against the rubric and assignment.
-- **CALIBRATION GUIDE** — The system prompt includes anchor scenarios so the model’s `checklist_pct` tracks coverage consistently, for example: all ☐ items covered well → about 92–95%; ~80% strong + rest partial → about 88–90%; about half the items → about 65–70%; do not over-penalize phrasing, style, or substituting a structured table for a swim-lane diagram when the rubric allows it.
-- **Graduate standard + YES/PARTIAL/NO rules** — Encourages substance over exact wording, bias toward PARTIAL over NO when there is any attempt, and ties checklist completion to a concrete `checklist_pct` formula: `(yes + 0.67 × partial) / total × 100`.
-- **Grade band table in the same prompt** — The LLM must map `checklist_pct` to *awarded points* using the stepwise multiplier bands below (the table in code is the source of truth; Python can still re-snap or cap outputs for consistency and policy).
-
-Optional rubric and assignment text are merged into the same request so the model knows what “done” means for that assignment.
-
-**Additional few-shot file (lowers grader–human error):** You can append instructor-written exemplars via `--few-shot-file path/to/exemplars.txt` on `grade_submission` / `run_pipeline --mode grade`, or set `AUTO_GRADER_FEW_SHOT_FILE` in `.env` (used by the web app’s grading subprocess). Content is added to the **system** prompt under `=== FEW-SHOT EXEMPLARS (calibration) ===` (capped at 16k chars). `grades.json` records `few_shot_file` when loaded.
+> 3. **Grading Pipeline** — Student PPTX/PDF/XLSX → Document Extractor + Vision AI → RAG Retrieval (top-8) → LLM Grader → YES/PARTIAL/NO → Score Normalizer → PDF Report + CSV
+> 4. **Quiz Batch Grading** — Excel upload → Column detection → Per-cell LLM → Scored Excel output
 
 ### Grading Logic
 
@@ -336,23 +384,20 @@ The grading engine (`scripts/grading/grade_submission.py`) works as follows:
 1. **Parse rubric** — extracts criteria, max points, and checklist items
 2. **Evaluate checklist** — each item rated YES / PARTIAL / NO
 3. **Calculate percentage** — `(yes + 0.67×partial) / total × 100`
-4. **Snap to grade band** — maps percentage to a multiplier (as defined in the grader’s system prompt):
+4. **Snap to grade band** — maps percentage to a multiplier:
 
-| Checklist % | Multiplier (× max points) |
-|---|---|
-| 95–100% | 1.000 |
-| 90–94% | 0.933 |
-| 85–89% | 0.900 |
-| 80–84% | 0.833 |
-| 75–79% | 0.800 |
-| 70–74% | 0.733 |
-| 65–69% | 0.700 |
-| 60–64% | 0.633 |
-| 55–59% | 0.567 |
-| 50–54% | 0.533 |
-| below 50% | 0.500 |
+   | Checklist % | Multiplier |
+   |---|---|
+   | 90–100% | 1.000 × max points |
+   | 83–89% | 0.967 × max points |
+   | 76–82% | 0.900 × max points |
+   | 68–75% | 0.750 × max points |
+   | < 44% | 0.500 × max points |
 
-5. **Apply policy caps** (deterministic post-processing in code when applicable) — for example, missing required workflow deliverable, section-coverage heuristics, and **no evidential match** for a criterion can cap the awarded points. See the implementation in `grade_submission.py` for exact conditions and thresholds.
+5. **Apply policy caps** — prevents AI from awarding full marks when structural requirements are missing:
+   - No workflow diagram found → cap at 78%
+   - Missing required sections → deduct 10% per missing section
+   - No evidence found for a criterion → cap that criterion at 60%
 
 ---
 
@@ -401,7 +446,6 @@ python scripts/cli/run_pipeline.py \
   --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval.jsonl" \
   --student-path "Student_1.pdf" \
   --rubric-file "data/library/rubrics/my_rubric.docx" \
-  --few-shot-file "path/to/grading_exemplars.txt" \
   --grading-provider openai \
   --grading-model "gpt-4o-mini"
 ```
@@ -415,7 +459,6 @@ python scripts/cli/run_pipeline.py \
 | `ANTHROPIC_API_KEY` | — | Anthropic Claude access |
 | `CHROMA_EMBEDDING_PROVIDER` | *(local)* | `google`, `openai`, or empty |
 | `AUTO_GRADER_RUBRIC_DIR` | `data/library/rubrics` | Default rubric folder |
-| `AUTO_GRADER_FEW_SHOT_FILE` | — | Optional path to few-shot exemplar text for the main grader |
 | `FLASK_HOST` | `127.0.0.1` | Web server host |
 | `FLASK_PORT` | `5000` | Web server port |
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |
@@ -458,13 +501,13 @@ This project was developed during **Spring 2026** at Boston University MET (CS/C
 1. **Read this README end to end** — the full workflow is documented in [Step-by-Step Workflow](#step-by-step-workflow)
 2. **Run the app locally first** — follow [Installation](#installation) and grade one sample student to see the full pipeline
 3. **Read these two files** (the core of the system):
- - `scripts/grading/grade_submission.py` — rubric parsing, scoring, policy caps
- - `scripts/web/blueprints/grading.py` — how the UI triggers grading
+   - `scripts/grading/grade_submission.py` — rubric parsing, scoring, policy caps
+   - `scripts/web/blueprints/grading.py` — how the UI triggers grading
 4. **Check the dataset documentation** — see `dataset-documentation/DATASETDOC-sp26.md` for data provenance and structure
 5. **Your first recommended tasks** (in order):
- - Add pytest tests for `grade_submission.py` (scoring math is critical to validate)
- - Add async job processing so batch grading doesn't block
- - Add a simple login page (Flask-Login) before any shared deployment
+   - Add pytest tests for `grade_submission.py` (scoring math is critical to validate)
+   - Add async job processing so batch grading doesn't block
+   - Add a simple login page (Flask-Login) before any shared deployment
 
 #### Where Key Data Lives
 

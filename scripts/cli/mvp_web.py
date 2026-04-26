@@ -23,7 +23,9 @@ DEFAULT_LECTURE_CHUNKS = (
     / "describe_openai_gpt-4o-2024-11-20_v2_semantic"
     / "chunks.jsonl"
 )
-DEFAULT_RUBRIC_ROOT = Path("/Users/sai/Downloads/Spring 2026 2/Assignment Rubrics")
+DEFAULT_RUBRIC_ROOT = Path(
+    os.getenv("AUTO_GRADER_RUBRIC_DIR", str(PROJECT_ROOT / "data" / "library" / "rubrics"))
+)
 
 MODEL_BY_PROVIDER = {
     "openai": "gpt-4o-2024-11-20",
