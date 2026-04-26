@@ -1,305 +1,594 @@
-# AI Auto Grader - Data Preparation and EDA Starter
+# GradeAI Pro — AI-Powered Auto Grader
 
-This repo contains a practical EDA starter kit for the CS581 auto-grading project.
+> **Boston University MET CS / CDS · Spring 2026** 
+> Automatically grade student PDF/PPTX/Excel submissions using Vision AI + RAG + LLM — with a simple web interface.
 
-## Final Unified Pipeline (New)
+---
 
-Use the new modular runner in `scripts/cli/run_pipeline.py` for the merged architecture
-(Sai + friend logic):
+## Table of Contents
 
-- `extract` mode: model-agnostic extraction only (PyMuPDF/Camelot/openpyxl/BeautifulSoup + OCR + captions).
-- `describe` mode: run one model (`openai`, `gemini`, `anthropic`) on extracted artifacts.
-- `full` mode: extract then describe in one command.
-- `compare` mode: compare multiple `summary.json` files.
-- `index` mode: index lecture chunks into ChromaDB.
-- `retrieve` mode: retrieve lecture context for student chunks.
-- `grade` mode: rubric-aware grading using retrieved lecture context.
+1. [What It Does](#what-it-does)
+2. [Prerequisites](#prerequisites)
+3. [Installation](#installation)
+4. [Configuration — API Keys](#configuration--api-keys)
+5. [Running the Web App](#running-the-web-app)
+6. [Step-by-Step Workflow](#step-by-step-workflow)
+ - [Step 1 — Upload & Describe Lectures](#step-1--upload--describe-lectures)
+ - [Step 2 — Push Lectures to RAG](#step-2--push-lectures-to-rag)
+ - [Step 3 — Upload Assignment & Rubric](#step-3--upload-assignment--rubric)
+ - [Step 4 — Grade Student Submissions](#step-4--grade-student-submissions)
+ - [Step 5 — View Reports & Export](#step-5--view-reports--export)
+7. [Project Structure](#project-structure)
+8. [Architecture Overview](#architecture-overview)
+9. [CLI Reference (Advanced)](#cli-reference-advanced)
+10. [For Future Developers](#for-future-developers)
+11. [Troubleshooting](#troubleshooting)
 
-Output structure:
+---
 
-```text
-outputs/final_phase1/<run_id>/
-├── extract/
-│   ├── manifest.json
-│   ├── images/
-│   ├── tables/
-│   ├── text_blocks/
-│   ├── ocr_results/
-│   └── per_file_json/
-├── describe_<provider>_<model>/
-│   ├── chunks.jsonl
-│   ├── summary.json
-│   └── per_file_json/
-└── comparison/
-    ├── comparison_report.md
-    └── comparison_report.json
+## What It Does
+
+GradeAI Pro is an end-to-end automated grading system that:
+
+- **Reads student submissions** — PDF, PowerPoint, and Excel files including images and diagrams
+- **Understands lecture content** — stores your lecture materials in a vector database (RAG)
+- **Retrieves relevant context** — fetches matching lecture sections before grading each student
+- **Grades against a rubric** — uses GPT-4o-mini / Gemini / Claude to evaluate each criterion
+- **Generates PDF reports** — per-student grade breakdown with evidence and feedback
+- **Exports to CSV** — all grades in one spreadsheet for your gradebook
+
+---
+
+## Prerequisites
+
+Before you start, make sure the following are installed on your machine:
+
+| Requirement | Version | How to get it |
+|---|---|---|
+| Python | 3.10 or newer | https://www.python.org/downloads/ |
+| Git | any | https://git-scm.com/ |
+| Tesseract OCR | 5.x | See below |
+| At least one API key | — | OpenAI, Google Gemini, or Anthropic |
+
+### Install Tesseract OCR
+
+Tesseract is needed for reading scanned/image-based PDFs.
+
+**macOS:**
+```bash
+brew install tesseract
 ```
 
-Quick commands:
-
+**Ubuntu / Debian:**
 ```bash
-# 1) Extract once (no model cost)
-python scripts/cli/run_pipeline.py \
-  --mode extract \
-  --data-dir "Spring 2026" \
-  --output-root "outputs/final_phase1" \
-  --run-id "run_01"
-
-# 2) Describe with OpenAI
-python scripts/cli/run_pipeline.py \
-  --mode describe \
-  --extract-dir "outputs/final_phase1/run_01/extract" \
-  --describe-dir "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20" \
-  --vision-provider openai \
-  --vision-model "gpt-4o-2024-11-20" \
-  --vision-input-cost-per-1m 5.0 \
-  --vision-output-cost-per-1m 15.0
-
-# 3) Index lecture chunks into Chroma
-python scripts/cli/run_pipeline.py \
-  --mode index \
-  --chunks-jsonl "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20/chunks.jsonl" \
-  --chroma-path "outputs/final_phase1/run_01/chroma_db" \
-  --chroma-collection "phase1_chunks"
-
-# 4) Retrieve lecture context for student chunks
-python scripts/cli/run_pipeline.py \
-  --mode retrieve \
-  --chunks-jsonl "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20/chunks.jsonl" \
-  --chroma-path "outputs/final_phase1/run_01/chroma_db" \
-  --chroma-collection "phase1_chunks" \
-  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval_results.jsonl" \
-  --retrieval-top-k 6
-
-# 5) Grade one student (with rubric)
-python scripts/cli/run_pipeline.py \
-  --mode grade \
-  --chunks-jsonl "outputs/final_phase1/run_01/describe_openai_gpt-4o-2024-11-20/chunks.jsonl" \
-  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval_results.jsonl" \
-  --student-path "Student 1" \
-  --rubric-file "docs/rubric.txt" \
-  --grading-provider openai \
-  --grading-model "gpt-4o-2024-11-20"
+sudo apt-get install tesseract-ocr
 ```
 
-Web MVP demo (upload PDF -> model select -> grade):
+**Windows:**
+Download the installer from https://github.com/UB-Mannheim/tesseract/wiki 
+Then add Tesseract to your PATH.
+
+---
+
+## Installation
 
 ```bash
-streamlit run scripts/cli/mvp_web.py
-```
+# 1. Clone the repository
+git clone https://github.com/Chava-Sai/Final-AI-Auto_Grader.git
+cd Final-AI-Auto_Grader
 
-Notes for web MVP:
-- Upload 3 files in UI: `student submission (.pdf or .xlsx)` + optional `rubric` + optional `assignment instructions`.
-- Rubric/assignment can be `.txt`, `.md`, `.pdf`, or `.docx`.
-- RAG retrieval uses a run-specific Chroma DB and local embeddings by default to avoid OpenAI embedding permission errors.
-
-Note: sections below this block are legacy starter notes from earlier iterations.
-For the current merged architecture, follow the commands in this "Final Unified Pipeline (New)" section.
-
-It is designed around the project scope from the Spring 2026 ETI/Spark collaboration:
-- Text-based grading already works.
-- Gaps are mostly with Excel, PDFs that include images, and image/diagram submissions.
-- EDA should focus on data quality, structure, and extractability for AI + RAG workflows.
-
-## What is included
-
-- `scripts/run_eda.py`: runs multimodal EDA over a dataset folder.
-- `scripts/tools/create_tool_comparison_matrix.py`: generates a structured matrix for comparing multiple AI tools on the same files.
-- `scripts/evaluate_student_extraction.py`: evaluates extraction quality specifically for student `.pdf` and `.xlsx` submissions.
-- `scripts/extract_workflow_diagrams.py`: extracts workflow diagrams (nodes + inferred edges + ordered steps) from PDF/image files.
-- `scripts/legacy/phase1_multimodal_pipeline.py`: Phase 1 pipeline for PDF/XLSX extraction, caption matching, OCR/vision image processing, and vector-ready chunk output.
-- `requirements.txt`: Python dependencies.
-- `docs/notion_data_preparation_eda.md`: draft text to paste into your Notion "Data Preparation and EDA" page.
-- `docs/virtual_meeting_walkthrough.md`: short screen-share walkthrough plan.
-- `docs/tool_comparison_playbook.md`: scoring rubric + process for platform comparison.
-
-## Quick start
-
-1. Create and activate a virtual environment.
-
-```bash
+# 2. Create a virtual environment
 python3 -m venv .venv
+
+# 3. Activate it
+#    macOS / Linux:
 source .venv/bin/activate
-```
+#    Windows:
+.venv\Scripts\activate
 
-2. Install dependencies.
-
-```bash
+# 4. Install all dependencies
 pip install -r requirements.txt
 ```
 
-3. Put project files in a local folder (for example `data/`) and run EDA.
+> **Note:** The first install may take 2–3 minutes — ChromaDB and sentence-transformers are large packages.
+
+---
+
+## Configuration — API Keys
 
 ```bash
-python scripts/run_eda.py --data-dir data --output-dir outputs/eda
+# Copy the template
+cp .env.example .env
 ```
 
-Optional OCR pass for image files (requires local Tesseract binary installed):
+Now open `.env` in any text editor and fill in your keys:
 
-```bash
-python scripts/run_eda.py --data-dir data --output-dir outputs/eda --enable-ocr
+```env
+OPENAI_API_KEY=sk-...        # from platform.openai.com
+GEMINI_API_KEY=AIza...       # from aistudio.google.com
+ANTHROPIC_API_KEY=sk-ant-... # from console.anthropic.com
 ```
 
-4. Generate tool-comparison matrix for manual/assisted evaluation across platforms.
+You only need **one** key to start grading. The app lets you pick the provider in the UI.
+
+### Which embedding provider to choose?
+
+Set `CHROMA_EMBEDDING_PROVIDER` in your `.env`:
+
+| Value | What it uses | Cost | Best for |
+|---|---|---|---|
+| `google` | gemini-embedding-001 | ~free tier | Best quality (recommended) |
+| `openai` | text-embedding-3-small | ~$0.00002/chunk | Good quality |
+| *(empty)* | local all-MiniLM-L6-v2 | Free, no key | Offline / no cost |
+
+> ⚠️ **Security:** `.env` is already in `.gitignore`. Never commit it to GitHub.
+
+---
+
+## Running the Web App
 
 ```bash
-python scripts/tools/create_tool_comparison_matrix.py \
-  --data-dir data \
-  --output-dir outputs/tool_comparison \
-  --tools "Azure AI Foundry,OpenAI,Gemini,Claude"
+# Make sure your virtual environment is active
+source .venv/bin/activate   # macOS/Linux
+# .venv\Scripts\activate    # Windows
+
+# Start the server
+python scripts/web/app.py
 ```
 
-5. Evaluate student submission extraction quality (PDF + XLSX only).
+Then open your browser at: **http://localhost:5000**
 
-```bash
-python scripts/evaluate_student_extraction.py \
-  --data-dir "Spring 2026" \
-  --output-dir outputs/student_extraction \
-  --student-pattern "(?i)student" \
-  --save-text
+You should see the GradeAI Pro interface with three tabs:
+- **Grade Submissions** — upload and grade student work
+- **Manage Lectures** — upload and index lecture materials
+- **Rubric & Setup** — manage assignments, rubrics, and quizzes
+
+---
+
+## Step-by-Step Workflow
+
+This is the exact workflow for a professor using the system each semester.
+
+---
+
+### Step 1 — Upload & Describe Lectures
+
+> Do this **once per semester** when you upload new lecture materials.
+
+1. Go to the **Manage Lectures** tab
+2. Click **Upload Lecture PDF** and upload your lecture PDFs (one at a time)
+3. After uploading, click **Describe Lecture**
+ - Select a Vision AI provider (OpenAI or Gemini recommended)
+ - This reads every image and diagram in the PDF — takes 1–3 minutes per lecture
+4. Repeat for all lecture modules
+
+**What this does:** The system extracts text, tables, and images from each PDF, then uses Vision AI to describe every diagram and figure. This creates rich, searchable content.
+
+---
+
+### Step 2 — Push Lectures to RAG
+
+> Do this **once** after describing all lectures.
+
+1. Still on the **Manage Lectures** tab
+2. Click **Index All Lectures into RAG**
+ - This embeds all described lecture content into ChromaDB
+ - Takes 1–5 minutes depending on how many lectures you have
+3. You'll see a confirmation: *"Shared Chroma index is ready"*
+
+**What this does:** All lecture chunks are embedded into a vector database. When grading, the system automatically retrieves the most relevant lecture sections for each student's work.
+
+---
+
+### Step 3 — Upload Assignment & Rubric
+
+> Do this **once per assignment**.
+
+1. Go to the **Rubric & Setup** tab
+2. Under **Assignments**, click **Upload** and add your assignment PDF
+ - Use the PDF version of the assignment (not a plain text file) for best results
+3. Under **Rubrics**, click **Upload** and add your rubric
+ - Supported formats: `.docx`, `.pdf`, `.txt`, `.json`
+ - **Tip:** A DOCX rubric with a table (criterion | points | checklist items) gives the best grading results
+4. Alternatively, click **Generate Rubric from Assignment** to have AI create a rubric from your assignment text
+
+---
+
+### Step 4 — Grade Student Submissions
+
+1. Go to the **Grade Submissions** tab
+2. Under **Files**, click **Add Files** and select student submissions
+ - Supported: `.pdf`, `.pptx`, `.xlsx`
+ - You can select multiple students at once for batch grading
+3. Choose your settings:
+ - **Grading Provider:** OpenAI (fast/cheap), Gemini, or Anthropic (most thorough)
+ - **Assignment:** select the assignment you uploaded in Step 3
+ - **Rubric:** select the rubric you uploaded in Step 3
+4. Click **Grade**
+5. Watch the progress log — grading takes about 1–3 minutes per student
+
+**What happens behind the scenes:**
+```
+Upload → Extract text/images → Vision AI describes diagrams
+  → Retrieve matching lecture context from RAG
+    → LLM grades each rubric criterion
+      → Apply policy caps → Generate PDF report
 ```
 
-Notes:
-- By default, saved extraction text is **not truncated**.
-- If you want short previews instead, add `--max-preview-chars 1200` (or any number).
+---
 
-6. Extract workflow diagrams as structured data (diagram-aware extraction).
+### Step 5 — View Reports & Export
 
-```bash
-python scripts/extract_workflow_diagrams.py \
-  --input-path "Spring 2026/Assignment Examples Fall 2025 /Assignment 1_ Diagram & Text/Student 1 - Good Example/Student 1.pdf" \
-  --output-dir outputs/workflow_diagrams \
-  --max-pages-per-pdf 8
+1. After grading completes, click **View Report** next to any student to see their detailed PDF
+2. Go to the **Reports** section to see all grading history
+3. Click **Export CSV** to download all grades in a spreadsheet
+
+Each PDF report includes:
+- Overall score and total points
+- Per-criterion scores with checklist evaluation
+- Evidence quotes from the student's submission
+- Any policy caps that were applied (e.g., missing diagram)
+
+---
+
+## Project Structure
+
+```
+Final-AI-Auto_Grader/
+│
+├── scripts/                        # All Python source code
+│   ├── cli/
+│   │   └── run_pipeline.py         # Main CLI — extract/describe/index/grade
+│   ├── core/
+│   │   ├── config.py               # Central config + env loading
+│   │   ├── chunking.py             # Text chunking with overlap
+│   │   └── pipeline.py             # Pipeline orchestration
+│   ├── extractors/                 # PDF, PPTX, Excel, HTML extractors
+│   ├── vision/                     # Vision AI wrappers + image tiling
+│   ├── image_utils/                # OCR, image filtering, captions
+│   ├── grading/
+│   │   └── grade_submission.py     # Core grading engine (rubric → score)
+│   ├── rubric_gen/                 # AI-powered rubric generation
+│   ├── retrieval/
+│   │   └── chroma_rag.py           # ChromaDB lecture index + retrieval
+│   ├── storage/                    # ChromaDB persistence + JSONL writers
+│   └── web/                        # Flask web application
+│       ├── app.py                  # App factory + route registration
+│       ├── config.py               # Web config + paths
+│       ├── blueprints/             # Route handlers
+│       │   ├── grading.py          # /api/grade, /api/grade-batch
+│       │   ├── lecture.py          # /api/library/lectures, /api/index-lectures
+│       │   ├── library.py          # /api/library/assignments|rubrics|quizzes
+│       │   ├── rubric.py           # /api/generate-rubric
+│       │   └── reports.py          # /api/history, /api/export-csv
+│       ├── templates/              # HTML templates (Jinja2)
+│       └── utils/
+│           ├── pipeline.py         # Web → CLI subprocess bridge
+│           ├── files.py            # File validation + safe paths
+│           ├── pdf_generator.py    # Grade report PDF builder
+│           └── web_scraper.py      # Web page text extraction
+│
+├── data/                           # Persistent user data (gitignored)
+│   ├── library/
+│   │   ├── assignments/            # Uploaded assignment files
+│   │   ├── lectures/               # Uploaded lecture PDFs
+│   │   ├── rubrics/                # Uploaded rubric files
+│   │   └── quizzes/                # Uploaded quiz files
+│   └── reports/                    # Generated PDF grade reports
+│
+├── outputs/                        # Pipeline run outputs (gitignored)
+│   └── final_phase1/
+│       ├── lecture_chunks_hybrid.jsonl   # Combined lecture chunks
+│       └── <run_id>/                     # Per-run results
+│           ├── extract/                  # Raw extraction
+│           ├── describe_<provider>/      # Vision descriptions + chunks.jsonl
+│           ├── retrieval.jsonl           # Lecture context matches
+│           └── grading/grades.json       # Final scores
+│
+├── .env.example                    # API key template (safe to commit)
+├── .env                            # Your actual keys (NEVER commit this)
+├── requirements.txt                # Python dependencies
+└── README.md                       # This file
 ```
 
-You can also pass a folder to process multiple student PDFs/images at once:
+---
+
+## Architecture Overview
+
+The full system design — including all 4 pipeline stages, API endpoints, and data flow — is shown below:
+
+![GradeAI Pro System Architecture](docs/GradeAI_Pro_Architecture.svg)
+
+> **Four pipeline stages:**
+> 1. **Lecture Knowledge Base** — HTML/PDF lecture ingestion → Vision AI diagram descriptions → Deduplication → Google Embeddings → ChromaDB (4,185 chunks)
+> 2. **Rubric Generation** — Assignment instructions → `claude-sonnet-4-6` → JSON rubric with criteria + checklist (Generate or Enhance mode)
+> 3. **Grading Pipeline** — Student PPTX/PDF/XLSX → Document Extractor + Vision AI → RAG Retrieval (top-8) → **LLM grader (few-shot calibration in `SYSTEM_PROMPT`)** → YES/PARTIAL/NO → grade-band mapping → policy caps where needed → PDF Report + CSV
+> 4. **Quiz Batch Grading** — Excel upload → Column detection → Per-cell LLM → Scored Excel output. **Quiz-specific few-shot calibration** (see below) is stored as editable text and used to align short-answer quiz items with human scores.
+
+### Few-shot calibration — quizzes (Quiz 1, Question 13)
+
+Some quiz items are graded with a **dedicated** system prompt that includes the official sub-rubric, error-correction rules, and **ANCHOR EXAMPLES** (graded exemplar answers) so the model does not over-rely on keyword matching. For CS 581 Quiz 1, Question 13 (BPR for EHR), the prompt is versioned in:
+
+- `scripts/grading/calibrations/quiz1_q13_bpr_system_prompt.txt`
+- `scripts/grading/regrade_quiz1_with_new_prompt.py` — batch re-grading / calibration runs against an anonymized **AI vs human** spreadsheet. Pass the path to your `.xlsx` and optional column indices; no machine-specific paths are required.
 
 ```bash
-python scripts/extract_workflow_diagrams.py \
-  --input-path "Spring 2026/Assignment Examples Fall 2025 /Assignment 1_ Diagram & Text" \
-  --output-dir outputs/workflow_diagrams_students \
-  --max-pages-per-pdf 8 \
-  --top-k-per-file 1
+python scripts/grading/regrade_quiz1_with_new_prompt.py path/to/CS581_Quiz1_AI_vs_Human_Anonymized.xlsx
 ```
 
-7. Run the Phase 1 multimodal extraction pipeline (PDF + XLSX + images).
+### Few-shot calibration (this repo, `scripts/grading/grade_submission.py`)
 
-OpenAI GPT-4o image descriptions (strict Phase 1 behavior: all images -> `image_description`):
+There is **no** per-run fine-tuning. **Few-shot calibration** is implemented as **fixed, in-prompt** instructions on every grading call:
+
+- **Blind grading** — The grader is told to ignore path/folder cues (for example, “good example” or “bad example”) and to score only the submission against the rubric and assignment.
+- **CALIBRATION GUIDE** — The system prompt includes anchor scenarios so the model’s `checklist_pct` tracks coverage consistently, for example: all ☐ items covered well → about 92–95%; ~80% strong + rest partial → about 88–90%; about half the items → about 65–70%; do not over-penalize phrasing, style, or substituting a structured table for a swim-lane diagram when the rubric allows it.
+- **Graduate standard + YES/PARTIAL/NO rules** — Encourages substance over exact wording, bias toward PARTIAL over NO when there is any attempt, and ties checklist completion to a concrete `checklist_pct` formula: `(yes + 0.67 × partial) / total × 100`.
+- **Grade band table in the same prompt** — The LLM must map `checklist_pct` to *awarded points* using the stepwise multiplier bands below (the table in code is the source of truth; Python can still re-snap or cap outputs for consistency and policy).
+
+Optional rubric and assignment text are merged into the same request so the model knows what “done” means for that assignment.
+
+### Grading Logic
+
+The grading engine (`scripts/grading/grade_submission.py`) works as follows:
+
+1. **Parse rubric** — extracts criteria, max points, and checklist items
+2. **Evaluate checklist** — each item rated YES / PARTIAL / NO
+3. **Calculate percentage** — `(yes + 0.67×partial) / total × 100`
+4. **Snap to grade band** — maps percentage to a multiplier (as defined in the grader’s system prompt):
+
+| Checklist % | Multiplier (× max points) |
+|---|---|
+| 95–100% | 1.000 |
+| 90–94% | 0.933 |
+| 85–89% | 0.900 |
+| 80–84% | 0.833 |
+| 75–79% | 0.800 |
+| 70–74% | 0.733 |
+| 65–69% | 0.700 |
+| 60–64% | 0.633 |
+| 55–59% | 0.567 |
+| 50–54% | 0.533 |
+| below 50% | 0.500 |
+
+5. **Apply policy caps** (deterministic post-processing in code when applicable) — for example, missing required workflow deliverable, section-coverage heuristics, and **no evidential match** for a criterion can cap the awarded points. See the implementation in `grade_submission.py` for exact conditions and thresholds.
+
+---
+
+## CLI Reference (Advanced)
+
+For running the pipeline without the web UI (automation, batch processing):
 
 ```bash
-export OPENAI_API_KEY="<your_key>"
-python scripts/legacy/phase1_multimodal_pipeline.py \
-  --data-dir "Spring 2026" \
-  --output-dir outputs/phase1_pipeline \
+# All commands assume you are in the project root with .venv active
+
+# ── Extract text/images from documents ───────────────────────────────────────
+python scripts/cli/run_pipeline.py \
+  --mode extract \
+  --data-dir "path/to/student/submissions" \
+  --output-root "outputs/final_phase1" \
+  --run-id "run_01"
+
+# ── Describe images with Vision AI ───────────────────────────────────────────
+python scripts/cli/run_pipeline.py \
+  --mode describe \
+  --extract-dir "outputs/final_phase1/run_01/extract" \
+  --describe-dir "outputs/final_phase1/run_01/describe_openai" \
   --vision-provider openai \
-  --vision-model "gpt-4o" \
-  --image-handling vision_only \
-  --vision-max-tokens 1800 \
-  --vision-retry-max-tokens 2500 \
-  --image-large-pixels-threshold 1000000 \
-  --image-tile-target-max-pixels 1000000 \
-  --image-max-tiles 9 \
-  --vision-input-cost-per-1m 5.0 \
-  --vision-output-cost-per-1m 15.0
+  --vision-model "gpt-4o-2024-11-20"
+
+# ── Index lecture chunks into ChromaDB ───────────────────────────────────────
+python scripts/cli/run_pipeline.py \
+  --mode index \
+  --chunks-jsonl "outputs/final_phase1/lecture_chunks_hybrid.jsonl" \
+  --chroma-path "outputs/final_phase1/chroma_db" \
+  --chroma-collection "lecture_v1"
+
+# ── Retrieve lecture context for student chunks ───────────────────────────────
+python scripts/cli/run_pipeline.py \
+  --mode retrieve \
+  --chunks-jsonl "outputs/final_phase1/run_01/describe_openai/chunks.jsonl" \
+  --chroma-path "outputs/final_phase1/chroma_db" \
+  --chroma-collection "lecture_v1" \
+  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval.jsonl" \
+  --retrieval-top-k 6
+
+# ── Grade a single student ────────────────────────────────────────────────────
+python scripts/cli/run_pipeline.py \
+  --mode grade \
+  --chunks-jsonl "outputs/final_phase1/run_01/describe_openai/chunks.jsonl" \
+  --retrieval-out-jsonl "outputs/final_phase1/run_01/retrieval.jsonl" \
+  --student-path "Student_1.pdf" \
+  --rubric-file "data/library/rubrics/my_rubric.docx" \
+  --grading-provider openai \
+  --grading-model "gpt-4o-mini"
 ```
 
-Large-image behavior: if `width*height >= image-large-pixels-threshold`, the script tiles the image, calls vision per tile, merges outputs, retries once on invalid JSON, and records `tiled`/`tile_count` metadata.
+### Environment Variables Quick Reference
 
-The pipeline now supports `.pdf`, `.xlsx`, `.html`, and `.htm` input files.
-HTML processing keeps only core text elements (`p`, `h1`, `h2`, `h3`, `li`) and strips scripts/styles/navigation containers.
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | — | OpenAI API access |
+| `GEMINI_API_KEY` | — | Google Gemini API access |
+| `ANTHROPIC_API_KEY` | — | Anthropic Claude access |
+| `CHROMA_EMBEDDING_PROVIDER` | *(local)* | `google`, `openai`, or empty |
+| `AUTO_GRADER_RUBRIC_DIR` | `data/library/rubrics` | Default rubric folder |
+| `FLASK_HOST` | `127.0.0.1` | Web server host |
+| `FLASK_PORT` | `5000` | Web server port |
+| `FLASK_DEBUG` | `0` | Enable Flask debug mode |
 
-Claude Sonnet image descriptions:
+---
 
+## For Future Developers
+
+> This section is for students who will continue this project in future semesters.
+
+### Handoff Notes — Spring 2026
+
+#### What Was Built
+
+This project was developed during **Spring 2026** at Boston University MET (CS/CDS). The following components are fully implemented and working:
+
+| Component | Status | Notes |
+|---|---|---|
+| HTML + PDF lecture ingestion | ✅ Complete | BeautifulSoup + PyMuPDF, 142 HTML + 6 PDF modules |
+| Vision AI diagram descriptions | ✅ Complete | OpenAI gpt-4o, Gemini, Claude with auto-tiling |
+| ChromaDB RAG index | ✅ Complete | 4,185 chunks, L2≤1.5, Google/OpenAI/local embeddings |
+| Rubric generation (AI) | ✅ Complete | claude-sonnet-4-6, Generate + Enhance modes |
+| Student grading (PDF/PPTX/XLSX) | ✅ Complete | All 3 LLM providers, policy caps, grade bands |
+| Quiz batch grading (Excel) | ✅ Complete | Fuzzy column detection, per-cell LLM, scored output |
+| PDF grade reports | ✅ Complete | Per-criterion breakdown, evidence, policy cap log |
+| CSV export | ✅ Complete | All grades in one spreadsheet |
+| Flask web UI | ✅ Complete | 3-tab interface, batch grading, library management |
+
+#### What Was NOT Built (Future Work)
+
+- **No automated test suite** — unit tests for grading logic are the highest-priority gap
+- **No authentication** — the web UI has no login; not suitable for public deployment without adding auth
+- **No async job queue** — batch grading blocks the Flask worker; large batches (>10 students) may time out; consider Celery + Redis
+- **No hosted deployment** — currently runs locally only; needs Gunicorn + Nginx or a cloud deployment for shared use
+- **No plagiarism detection** — no cross-student comparison or similarity scoring
+- **No grade appeal workflow** — grades are final; no UI for students to dispute
+
+#### How to Start Efficiently (Next Team)
+
+1. **Read this README end to end** — the full workflow is documented in [Step-by-Step Workflow](#step-by-step-workflow)
+2. **Run the app locally first** — follow [Installation](#installation) and grade one sample student to see the full pipeline
+3. **Read these two files** (the core of the system):
+ - `scripts/grading/grade_submission.py` — rubric parsing, scoring, policy caps
+ - `scripts/web/blueprints/grading.py` — how the UI triggers grading
+4. **Check the dataset documentation** — see `dataset-documentation/DATASETDOC-sp26.md` for data provenance and structure
+5. **Your first recommended tasks** (in order):
+ - Add pytest tests for `grade_submission.py` (scoring math is critical to validate)
+ - Add async job processing so batch grading doesn't block
+ - Add a simple login page (Flask-Login) before any shared deployment
+
+#### Where Key Data Lives
+
+| Data | Location | Gitignored? |
+|---|---|---|
+| Lecture PDFs/HTMLs | `data/library/lectures/` | Yes |
+| Student submissions | `data/library/assignments/` | Yes |
+| Rubric files | `data/library/rubrics/` | Yes |
+| ChromaDB vector index | `outputs/final_phase1/chroma_db/` | Yes |
+| Grade PDF reports | `data/reports/` | Yes |
+| Lecture chunks (JSONL) | `outputs/final_phase1/lecture_chunks_hybrid.jsonl` | Yes |
+| API keys | `.env` | Yes — never commit |
+
+All gitignored data directories are **auto-created** on first app startup.
+
+---
+
+### How to Add a New Grading Provider
+
+1. Open `scripts/web/config.py`
+2. Add an entry to the `PROVIDERS` dict:
+   ```python
+   "myprovider": {
+       "label": "My Provider",
+       "model": "my-model-name",
+       "color": "#hex",
+       "icon":  "myprovider",
+   }
+   ```
+3. Add the API key env var to `PROVIDER_API_KEY_ENV`
+4. In `scripts/grading/grade_submission.py`, extend the `_call_llm()` function to handle the new provider
+
+### How to Add a New Document Format
+
+1. Create `scripts/extractors/myformat_extractor.py` following the pattern in `pdf_extractor.py`
+2. Export it from `scripts/extractors/__init__.py`
+3. Add the file extension to `SUPPORTED_EXTENSIONS` in `scripts/core/config.py`
+4. Add the extension to `STUDENT_ALLOWED_EXTS` in `scripts/web/config.py`
+
+### How the Web App Calls the Pipeline
+
+The web app **never imports the grading code directly**. Instead, blueprints in `scripts/web/blueprints/` call `_run()` from `scripts/web/utils/pipeline.py`, which launches `scripts/cli/run_pipeline.py` as a **subprocess**. This keeps the web process clean and allows the pipeline to run independently.
+
+### Key Files to Understand First
+
+| File | Why it matters |
+|---|---|
+| `scripts/cli/run_pipeline.py` | The central CLI — all 7 pipeline modes live here |
+| `scripts/grading/grade_submission.py` | The grading engine — rubric parsing, scoring, policy caps |
+| `scripts/web/config.py` | All paths and provider config — change defaults here |
+| `scripts/retrieval/chroma_rag.py` | RAG indexing and retrieval |
+| `scripts/web/blueprints/grading.py` | Web grading routes — how UI triggers the pipeline |
+| `scripts/web/blueprints/lecture.py` | Lecture upload, describe, and RAG push flow |
+
+### Running Tests
+
+There is no automated test suite yet — this is a good first contribution for next semester students. Key areas to test:
+
+- Rubric parsing (DOCX table, regex, AI fallback)
+- Grade band snapping logic
+- Policy cap application
+- ChromaDB indexing and retrieval round-trip
+
+### Recommended First Issues for Next Semester
+
+- [ ] Add pytest unit tests for `grade_submission.py` scoring logic
+- [ ] Add support for `.html` student submissions in the web UI
+- [ ] Add a "re-grade with different model" button that preserves extraction
+- [ ] Add email notification when batch grading completes
+- [ ] Add a rubric quality checker (warns if rubric has no checklist items)
+- [ ] Support multi-slide PPTX rubrics (currently only PDF/DOCX)
+
+---
+
+## Troubleshooting
+
+### "Module not found" error on startup
+Make sure your virtual environment is active:
 ```bash
-export ANTHROPIC_API_KEY="<your_key>"
-python scripts/legacy/phase1_multimodal_pipeline.py \
-  --data-dir "Spring 2026" \
-  --output-dir outputs/phase1_pipeline_claude \
-  --vision-provider anthropic \
-  --vision-model "claude-3-5-sonnet-latest" \
-  --image-handling vision_only
+source .venv/bin/activate   # macOS/Linux
+.venv\Scripts\activate      # Windows
 ```
+Then re-run `pip install -r requirements.txt`.
 
-Optional legacy behavior (OCR for scanned pages, vision for others):
-
+### Tesseract not found
+Install Tesseract (see [Prerequisites](#prerequisites)) and make sure it's on your PATH:
 ```bash
-python scripts/legacy/phase1_multimodal_pipeline.py \
-  --data-dir "Spring 2026" \
-  --output-dir outputs/phase1_pipeline_mixed \
-  --vision-provider openai \
-  --vision-model "gpt-4o" \
-  --image-handling ocr_then_vision
+tesseract --version   # should print version number
 ```
 
-Optional direct Chroma ingestion:
+### Grading returns very low scores (below 40)
+Check which assignment file is selected. A plain `.txt` file with strict rules will score much lower than the full assignment PDF. Always use the PDF version of the assignment.
 
+### ChromaDB rate limit (429 error) when indexing
+This happens with Google embeddings on large lecture sets. The system automatically batches with `--chroma-batch-size 20`. If it still fails, wait 60 seconds and retry.
+
+### "Describe pipeline failed" in the web UI
+This usually means a Vision API key is missing or the selected provider has no credits. Check your `.env` file and verify the key works at the provider's dashboard.
+
+### Port 5000 already in use
 ```bash
-python scripts/legacy/phase1_multimodal_pipeline.py \
-  --data-dir "Spring 2026" \
-  --output-dir outputs/phase1_pipeline_chroma \
-  --vision-provider openai \
-  --vision-model "gpt-4o" \
-  --image-handling vision_only \
-  --vector-db chroma \
-  --chroma-path outputs/phase1_pipeline_chroma/chroma_db \
-  --chroma-collection phase1_chunks
+FLASK_PORT=5001 python scripts/web/app.py
 ```
-
-8. Export PDF extraction as readable DOCX (text plus image-extracted text in page order).
-
+Or find and kill the process using port 5000:
 ```bash
-python scripts/exporters/export_pdf_extraction_docx.py \
-  --per-file-json-dir outputs/phase1_pipeline/per_file_json \
-  --output-dir outputs/phase1_pipeline/docx_reconstruction
+lsof -i :5000          # macOS/Linux — find the PID
+kill -9 <PID>
 ```
 
-9. Export Excel extraction as readable DOCX (sheet-wise tables and embedded-image text).
+### Grades differ between runs
+The LLM has slight non-determinism even at temperature=0. Small differences (±2 pts) are normal. Larger differences usually mean different assignment files were selected between runs.
 
-```bash
-python scripts/exporters/export_excel_extraction_docx.py \
-  --per-file-json-dir outputs/phase1_pipeline/per_file_json \
-  --output-dir outputs/phase1_pipeline/excel_docx_reconstruction
-```
+---
 
-10. Generate presentation visuals from Phase 1 results.
+## Built With
 
-```bash
-python scripts/visuals/generate_phase1_visuals.py \
-  --summary-json outputs/phase1_pipeline/summary.json \
-  --chunks-jsonl outputs/phase1_pipeline/chunks.jsonl \
-  --output-dir outputs/phase1_pipeline/visuals
-```
+| Component | Technology |
+|---|---|
+| Web framework | Flask 3.x |
+| Vector database | ChromaDB |
+| PDF extraction | PyMuPDF + Camelot |
+| OCR | Tesseract via pytesseract |
+| Vision AI | OpenAI GPT-4o / Google Gemini / Anthropic Claude |
+| Grading LLM | OpenAI GPT-4o-mini / Gemini 2.5 Flash / Claude Sonnet |
+| Embeddings | Google gemini-embed / OpenAI text-embed-3-small / local MiniLM |
+| Report PDF | fpdf2 |
+| Language | Python 3.10+ |
 
-## Outputs
+---
 
-The script writes:
-- `outputs/eda/summary.json`
-- `outputs/eda/file_profiles.csv`
-- `outputs/eda/eda_report.md`
-- `outputs/eda/charts/*` (if `matplotlib` is installed)
-
-Use `eda_report.md` as your discussion artifact during the virtual meeting, and copy/edit the Notion draft from `docs/notion_data_preparation_eda.md`.
-
-For platform/tool comparison, use:
-- `outputs/tool_comparison/tool_comparison_matrix.csv`
-- `outputs/tool_comparison/tool_comparison_runbook.md`
-- `docs/tool_comparison_playbook.md`
-
-For student extraction quality, use:
-- `outputs/student_extraction/extraction_summary.csv`
-- `outputs/student_extraction/extraction_report.md`
-- `outputs/student_extraction/extracted_text/*` (per-file extracted text)
-
-For workflow diagram extraction, use:
-- `outputs/workflow_diagrams/workflow_manifest.json`
-- `outputs/workflow_diagrams/*_workflow.json`
-- `outputs/workflow_diagrams/*_annotated.png`
-
-For Phase 1 multimodal pipeline, use:
-- `outputs/phase1_pipeline/chunks.jsonl`
-- `outputs/phase1_pipeline/summary.json`
-- `outputs/phase1_pipeline/extracted_images/*`
-- `outputs/phase1_pipeline/per_file_json/*` (one JSON per source PDF/XLSX, mirrored folder structure)
-- `outputs/phase1_pipeline/docx_reconstruction/*` (PDF reconstructions for qualitative extraction review)
-- `outputs/phase1_pipeline/excel_docx_reconstruction/*` (Excel reconstructions for qualitative extraction review)
-- `outputs/phase1_pipeline/visuals/*` (slide-ready charts and extraction comparison image)
+*GradeAI Pro — Boston University MET · CS/CDS · Spring 2026*
