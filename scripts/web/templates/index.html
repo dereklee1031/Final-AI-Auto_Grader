@@ -2367,7 +2367,6 @@ async function generateRubric(){
       list.appendChild(card);
     });
 
-    document.getElementById('rubricRawJson').textContent = JSON.stringify(data.rubric, null, 2);
     output.style.display = 'block';
 
     if(data.saved_path){
